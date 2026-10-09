@@ -514,7 +514,7 @@ else
             echo -e "\033[1;32mUsuário: \033[1;37m$username"
             echo -e "\033[1;32mContraseña: \033[1;37m$password"
             echo -e "\033[1;32mExpira em: \033[1;37m$gui"
-            echo -e "\033[1;32mLimite de conexões: \033[1;37m$sshlimiter"
+            echo -e "\033[1;32mLimite de Conexiones: \033[1;37m$sshlimiter"
         }
     } || {
         clear
@@ -523,7 +523,7 @@ else
         echo -e "\033[1;32mUsuário: \033[1;37m$username"
         echo -e "\033[1;32mContraseña: \033[1;37m$password"
         echo -e "\033[1;32mExpira em: \033[1;37m$gui"
-        echo -e "\033[1;32mLimite de conexões: \033[1;37m$sshlimiter"
+        echo -e "\033[1;32mLimite de Conexiones: \033[1;37m$sshlimiter"
     }
 
 fi
