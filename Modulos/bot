@@ -228,7 +228,7 @@ criar_user() {
         echo "$usuario:$senha:$info_data:$limite" >/etc/bot/revenda/${message_from_username}/usuarios/$usuario
         echo "$usuario:$senha:$info_data:$limite" >/etc/bot/info-users/$usuario
     }
-    echo "$usuario $limite" >>/root/usuarios.db
+    echo "$usuario $limite" >>/etc/SSHPlus/usuarios.db
     echo "$senha" >/etc/SSHPlus/senha/$usuario
     [[ -e "/etc/openvpn/server.conf" ]] && {
         cd /etc/openvpn/easy-rsa/
@@ -261,8 +261,8 @@ fun_del_user() {
         piduser=$(ps -u "$usuario" | grep sshd | cut -d? -f1)
         kill -9 $piduser >/dev/null 2>&1
         userdel --force "$usuario" 2>/dev/null
-        grep -v ^$usuario[[:space:]] /root/usuarios.db >/tmp/ph
-        cat /tmp/ph >/root/usuarios.db
+        grep -v ^$usuario[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+        cat /tmp/ph >/etc/SSHPlus/usuarios.db
         rm /etc/SSHPlus/senha/$usuario >/dev/null 2>&1
     } || {
         [[ ! -e /etc/bot/revenda/${message_from_username}/usuarios/$usuario ]] && {
@@ -275,8 +275,8 @@ fun_del_user() {
         piduser=$(ps -u "$usuario" | grep sshd | cut -d? -f1)
         kill -9 $piduser >/dev/null 2>&1
         userdel --force "$usuario" 2>/dev/null
-        grep -v ^$usuario[[:space:]] /root/usuarios.db >/tmp/ph
-        cat /tmp/ph >/root/usuarios.db
+        grep -v ^$usuario[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+        cat /tmp/ph >/etc/SSHPlus/usuarios.db
         rm /etc/SSHPlus/senha/$usuario >/dev/null 2>&1
         rm /etc/bot/revenda/${message_from_username}/usuarios/$usuario
         rm /etc/bot/info-users/$usuario
@@ -347,11 +347,11 @@ alterar_limite() {
 alterar_limite_user() {
     usuario=$1
     limite=$2
-    database="/root/usuarios.db"
+    database="/etc/SSHPlus/usuarios.db"
     [[ "${message_from_id[$id]}" == "$id_admin" ]] && {
-        grep -v ^$usuario[[:space:]] /root/usuarios.db >/tmp/a
-        mv /tmp/a /root/usuarios.db
-        echo $usuario $limite >>/root/usuarios.db
+        grep -v ^$usuario[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/a
+        mv /tmp/a /etc/SSHPlus/usuarios.db
+        echo $usuario $limite >>/etc/SSHPlus/usuarios.db
         return 0
     }
     [[ -d /etc/bot/revenda/${message_from_username} ]] && {
@@ -382,9 +382,9 @@ alterar_limite_user() {
             _erro='1'
             return 0
         }
-        grep -v ^$usuario[[:space:]] /root/usuarios.db >/tmp/a
-        mv /tmp/a /root/usuarios.db
-        echo $usuario $limite >>/root/usuarios.db
+        grep -v ^$usuario[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/a
+        mv /tmp/a /etc/SSHPlus/usuarios.db
+        echo $usuario $limite >>/etc/SSHPlus/usuarios.db
         limite2=$(cat /etc/bot/revenda/${message_from_username}/usuarios/$usuario | awk -F : {'print $4'})
         sed -i "/\b$usuario\b/ s/\b$limite2\b/$limite/" /etc/bot/revenda/${message_from_username}/usuarios/$usuario
         sed -i "/\b$usuario\b/ s/\b$limite2\b/$limite/" /etc/bot/info-users/$usuario
@@ -411,7 +411,7 @@ alterar_data() {
 alterar_data_user() {
     usuario=$1
     inputdate=$2
-    database="/root/usuarios.db"
+    database="/etc/SSHPlus/usuarios.db"
     [[ "$(echo -e "$inputdate" | sed -e 's/[^/]//ig')" != '//' ]] && {
         udata=$(date "+%d/%m/%Y" -d "+$inputdate days")
         sysdate="$(echo "$udata" | awk -v FS=/ -v OFS=- '{print $3,$2,$1}')"
@@ -455,7 +455,7 @@ ver_users() {
             for user in $(cat /etc/passwd | awk -F : '$3 >= 1000 {print $1}' | grep -v nobody); do
                 info='===========================\n'
                 [[ -e /etc/SSHPlus/senha/$user ]] && senha=$(cat /etc/SSHPlus/senha/$user) || senha='Null'
-                [[ $(grep -wc $user $HOME/usuarios.db) != '0' ]] && limite=$(grep -w $user $HOME/usuarios.db | cut -d' ' -f2) || limite='Null'
+                [[ $(grep -wc $user /etc/SSHPlus/usuarios.db) != '0' ]] && limite=$(grep -w $user /etc/SSHPlus/usuarios.db | cut -d' ' -f2) || limite='Null'
                 datauser=$(chage -l $user | grep -i co | awk -F : '{print $2}')
                 [[ $datauser = ' never' ]] && {
                     data="00/00/00"
@@ -507,7 +507,7 @@ ver_users() {
             for user in $(ls /etc/bot/revenda/${callback_query_from_username}/usuarios); do
                 info='===========================\n'
                 [[ -e /etc/SSHPlus/senha/$user ]] && senha=$(cat /etc/SSHPlus/senha/$user) || senha='Null'
-                [[ $(grep -wc $user $HOME/usuarios.db) != '0' ]] && limite=$(grep -w $user $HOME/usuarios.db | cut -d' ' -f2) || limite='Null'
+                [[ $(grep -wc $user /etc/SSHPlus/usuarios.db) != '0' ]] && limite=$(grep -w $user /etc/SSHPlus/usuarios.db | cut -d' ' -f2) || limite='Null'
                 datauser=$(chage -l $user | grep -i co | awk -F : '{print $2}')
                 [[ $datauser = ' never' ]] && {
                     data="00/00/00"
@@ -572,7 +572,7 @@ fun_drop() {
 
 monitor_ssh() {
     if [[ "${callback_query_from_id[$id]}" == "$id_admin" ]]; then
-        database="/root/usuarios.db"
+        database="/etc/SSHPlus/usuarios.db"
         cad_onli=/tmp/$(echo $RANDOM)
         local info_on
         info_on='=×=×=×=×=×=×=×=×=×=×=×=×=×=\n'
@@ -629,7 +629,7 @@ monitor_ssh() {
                 --text "VC AINDA NAO CRIOU USUARIO!"
             return 0
         }
-        database="/root/usuarios.db"
+        database="/etc/SSHPlus/usuarios.db"
         cad_onli=/tmp/$(echo $RANDOM)
         local info_on
         info_on='=×=×=×=×=×=×=×=×=×=×=×=×=×=\n'
@@ -738,7 +738,7 @@ infovps() {
     cpucores=$(grep -c cpu[0-9] /proc/stat)
     ram1=$(free -h | grep -i mem | awk {'print $2'})
     usoram=$(free -m | awk 'NR==2{printf "%.2f%%\t\t", $3*100/$2 }')
-    total=$(cat -n /root/usuarios.db | tail -n 1 | awk '{print $1}')
+    total=$(cat -n /etc/SSHPlus/usuarios.db | tail -n 1 | awk '{print $1}')
     echo -e "SSH: $(grep 'Port' /etc/ssh/sshd_config | cut -d' ' -f2 | grep -v 'no' | xargs)" >$PTs
     [[ -e "/etc/stunnel/stunnel.conf" ]] && echo -e "SSL Tunel: $(netstat -nplt | grep 'stunnel' | awk {'print $4'} | cut -d: -f2 | xargs)" >>$PTs
     [[ -e "/etc/openvpn/server.conf" ]] && echo -e "Openvpn: $(netstat -nplt | grep 'openvpn' | awk {'print $4'} | cut -d: -f2 | xargs)" >>$PTs
@@ -881,7 +881,7 @@ backup_users() {
     rm /root/backup.vps 1>/dev/null 2>/dev/null
     ShellBot.answerCallbackQuery --callback_query_id ${callback_query_id[$id]} \
         --text "♻️ CRIANDO BACKUP DE USUARIOS"
-    tar cvf /root/backup.vps /root/usuarios.db /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/bot /etc/SSHPlus/senha /etc/SSHPlus/v2ray /etc/openvpn $HOME/BOT/permitidos $HOME/BOT/revenda >/dev/null 2>&1
+    tar cvf /root/backup.vps /etc/SSHPlus/usuarios.db /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/bot /etc/SSHPlus/senha /etc/SSHPlus/v2ray /etc/openvpn $HOME/BOT/permitidos $HOME/BOT/revenda >/dev/null 2>&1
     ShellBot.sendDocument --chat_id ${id_admin} \
         --document "@/root/backup.vps" \
         --caption "$(echo -e "♻️ BACKUP DE USUARIOS ♻️")"
@@ -952,7 +952,7 @@ fun_teste() {
         echo "$senha"
     ) | passwd $usuario >/dev/null 2>&1
     echo "$senha" >/etc/SSHPlus/senha/$usuario
-    echo "$usuario $limite" >>/root/usuarios.db
+    echo "$usuario $limite" >>/etc/SSHPlus/usuarios.db
     [[ "${message_from_id[$id]}" != "$id_admin" ]] && {
         echo "$usuario:$senha:$ex_date:$limite" >/etc/bot/revenda/${message_from_username}/usuarios/$usuario
     }
@@ -962,7 +962,7 @@ fun_teste() {
 	# USUARIO TESTE
 	[[ \$(ps -u "$usuario" | grep -c sshd) != '0' ]] && pkill -u $usuario
 	userdel --force $usuario
-	grep -v ^$usuario[[:space:]] /root/usuarios.db > /tmp/ph ; cat /tmp/ph > /root/usuarios.db
+	grep -v ^$usuario[[:space:]] /etc/SSHPlus/usuarios.db > /tmp/ph ; cat /tmp/ph > /etc/SSHPlus/usuarios.db
 	[[ -e $dir_teste ]] && rm $dir_teste
 	rm /etc/SSHPlus/senha/$usuario > /dev/null 2>&1
 	rm /etc/SSHPlus/userteste/$usuario.sh
@@ -988,7 +988,7 @@ fun_teste() {
 
 fun_exp_user() {
     if [[ "${callback_query_from_id[$id]}" == "$id_admin" ]]; then
-        [[ $(cat /root/usuarios.db | wc -l) == '0' ]] && {
+        [[ $(cat /etc/SSHPlus/usuarios.db | wc -l) == '0' ]] && {
             ShellBot.answerCallbackQuery --callback_query_id ${callback_query_id[$id]} \
                 --text "VC AINDA NAO CRIOU USUARIO!"
             return 0
@@ -1003,8 +1003,8 @@ fun_exp_user() {
             echo $diff | grep -q ^\- && continue
             pkill -u $user
             userdel --force $user
-            grep -v ^$user[[:space:]] /root/usuarios.db >/tmp/ph
-            cat /tmp/ph >/root/usuarios.db
+            grep -v ^$user[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+            cat /tmp/ph >/etc/SSHPlus/usuarios.db
             [[ -e /etc/bot/info-users/$user ]] && rm /etc/bot/info-users/$user
             [[ -e /etc/SSHPlus/userteste/$user.sh ]] && rm /etc/SSHPlus/userteste/$user.sh
             [[ "$(ls /etc/bot/revenda)" != '0' ]] && {
@@ -1038,8 +1038,8 @@ fun_exp_user() {
             echo $diff | grep -q ^\- && continue
             pkill -f $user
             userdel --force $user
-            grep -v ^$user[[:space:]] /root/usuarios.db >/tmp/ph
-            cat /tmp/ph >/root/usuarios.db
+            grep -v ^$user[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+            cat /tmp/ph >/etc/SSHPlus/usuarios.db
             [[ -e /etc/SSHPlus/userteste/$user.sh ]] && rm /etc/SSHPlus/userteste/$user.sh
             [[ -e "$dir_user/$user" ]] && rm $dir_user/$user
         done
@@ -1388,8 +1388,8 @@ del_rev() {
                             piduser=$(ps -u "$_user" | grep sshd | cut -d? -f1)
                             kill -9 $piduser >/dev/null 2>&1
                             userdel --force "$_user" 2>/dev/null
-                            grep -v ^$_user[[:space:]] /root/usuarios.db >/tmp/ph
-                            cat /tmp/ph >/root/usuarios.db
+                            grep -v ^$_user[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+                            cat /tmp/ph >/etc/SSHPlus/usuarios.db
                             rm /etc/bot/info-users/$_user
                         done
                     }
@@ -1405,8 +1405,8 @@ del_rev() {
                     piduser=$(ps -u "$_user" | grep sshd | cut -d? -f1)
                     kill -9 $piduser >/dev/null 2>&1
                     userdel --force "$_user" 2>/dev/null
-                    grep -v ^$_user[[:space:]] /root/usuarios.db >/tmp/ph
-                    cat /tmp/ph >/root/usuarios.db
+                    grep -v ^$_user[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+                    cat /tmp/ph >/etc/SSHPlus/usuarios.db
                     rm /etc/bot/info-users/$_user
                 done
             }
@@ -1432,8 +1432,8 @@ del_rev() {
                         piduser=$(ps -u "$_user" | grep sshd | cut -d? -f1)
                         kill -9 $piduser >/dev/null 2>&1
                         userdel --force "$_user" 2>/dev/null
-                        grep -v ^$_user[[:space:]] /root/usuarios.db >/tmp/ph
-                        cat /tmp/ph >/root/usuarios.db
+                        grep -v ^$_user[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+                        cat /tmp/ph >/etc/SSHPlus/usuarios.db
                         rm /etc/bot/info-users/$_user
                     done
                 }
@@ -1447,8 +1447,8 @@ del_rev() {
                         piduser=$(ps -u "$_user" | grep sshd | cut -d? -f1)
                         kill -9 $piduser >/dev/null 2>&1
                         userdel --force "$_user" 2>/dev/null
-                        grep -v ^$_user[[:space:]] /root/usuarios.db >/tmp/ph
-                        cat /tmp/ph >/root/usuarios.db
+                        grep -v ^$_user[[:space:]] /etc/SSHPlus/usuarios.db >/tmp/ph
+                        cat /tmp/ph >/etc/SSHPlus/usuarios.db
                         rm /etc/bot/info-users/$_user
                     done
                 }

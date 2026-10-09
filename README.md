@@ -1,7 +1,7 @@
 # 🚀 SSHPLUS MANAGER - Panel Web & Instalador Completo
 
-![GitHub](https://img.shields.io/github/license/rogellevi/SSHPLUS)
-![GitHub last commit](https://img.shields.io/github/last-commit/rogellevi/SSHPLUS)
+![GitHub](https://img.shields.io/github/license/rogellevi/SSHPLUS-fixed)
+![GitHub last commit](https://img.shields.io/github/last-commit/rogellevi/SSHPLUS-fixed)
 ![Debian/Ubuntu](https://img.shields.io/badge/OS-Debian%2FUbuntu-blue)
 
 **SSHPLUS MANAGER** es un script bash interactivo diseñado para automatizar la instalación y configuración de **SSHPLUS**, un **Panel Web (Apache + PHP)** y la gestión de **Certificados SSL (Let's Encrypt / ACME.sh)** en servidores VPS.
@@ -34,11 +34,11 @@ Ejecuta el siguiente comando como usuario `root` para iniciar el instalador.
 
 ### INSTALL SCRIPT SSHPLUS
 
-<pre><code>apt update -y && apt upgrade -y && wget https://raw.githubusercontent.com/rogellevi/SSHPLUS/master/Plus && chmod 777 Plus && ./Plus</code></pre>
+<pre><code>apt update -y && apt upgrade -y && wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Plus && chmod 777 Plus && ./Plus</code></pre>
 
 ### Instalación con Menú
 ```
-wget -O manager.sh https://raw.githubusercontent.com/rogellevi/SSHPLUS/main/manager.sh && bash manager.sh
+wget -O manager.sh https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/manager.sh && bash manager.sh
 ```
 
 #### ROOT Y ABRIR PUERTOS
@@ -46,11 +46,11 @@ Primero Teclee : sudo su
 
 Habilitar ROOT
 ~~~~
-wget https://raw.githubusercontent.com/rogellevi/SSHPLUS/master/root && bash root
+wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/root && bash root
 ~~~~
 
 Abrir Puertos:
 
 ~~~~
-wget -O firewall https://raw.githubusercontent.com/rogellevi/SSHPLUS/main/firewall && chmod +x firewall && sudo ./firewall
+wget -O firewall https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/firewall && chmod +x firewall && sudo ./firewall
 ~~~~

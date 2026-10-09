@@ -68,13 +68,13 @@ backbot=$1
 	echo -ne "\033[1;32mOQUE DESEJA FAZER\033[1;31m ?\033[1;37m : "
 	read opcao
 	if [[ "$opcao" = '1' ]]; then
-		if [ -f "/root/usuarios.db" ]; then
+		if [ -f "/etc/SSHPlus/usuarios.db" ]; then
 			[[ -e "/etc/openvpn" ]] && {
 				echo ""
 				echo -e "\033[1;32mCertificado Ovpn localizado...\033[0m"
 				rm -rf $HOME/backup.vps >/dev/null 2>&1
 				sleep 1
-				tar cvf /root/backup.vps /root/usuarios.db /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/SSHPlus/senha /etc/SSHPlus/v2ray /etc/openvpn $HOME/BOT/permitidos $HOME/BOT/revenda >/dev/null 2>&1
+				tar cvf /root/backup.vps /etc/SSHPlus/usuarios.db /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/SSHPlus/senha /etc/SSHPlus/v2ray /etc/openvpn $HOME/BOT/permitidos $HOME/BOT/revenda >/dev/null 2>&1
 				echo ""
 				echo -e "\033[1;32mBACKUP CRIADO COM SUCESSO !\033[0m"
 				echo ""
@@ -195,7 +195,7 @@ backbot=$1
 	fi
 } || {
 	rm /root/backup.vps 1>/dev/null 2>/dev/null
-	tar cvf /root/backup.vps /root/usuarios.db /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/bot /etc/SSHPlus/senha /etc/SSHPlus/v2ray /etc/openvpn $HOME/BOT/permitidos $HOME/BOT/revenda >/dev/null 2>&1
+	tar cvf /root/backup.vps /etc/SSHPlus/usuarios.db /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/bot /etc/SSHPlus/senha /etc/SSHPlus/v2ray /etc/openvpn $HOME/BOT/permitidos $HOME/BOT/revenda >/dev/null 2>&1
 	[[ -d "/etc/SSHPlus/backups" ]] && mv /root/backup.vps /etc/SSHPlus/backups/backup.vps
 	exit
 }

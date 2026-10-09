@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 #   SSHPLUS MANAGER - Instalador Completo
-#   GitHub: https://github.com/rogellevi/SSHPLUS
+#   GitHub: https://github.com/rogellevi/SSHPLUS-fixed
 #   Instala: SSHPLUS + Apache + PHP + Panel Web + SSL
 # ============================================================
 
@@ -15,8 +15,8 @@ WHITE='\033[1;37m'
 NC='\033[0m'
 
 # URLs
-PANEL_URL="https://raw.githubusercontent.com/rogellevi/SSHPLUS/main/sshplus.php"
-PANEL_UPDATE_URL="https://raw.githubusercontent.com/rogellevi/SSHPLUS/main/update/sshplus.php"
+PANEL_URL="https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/sshplus.php"
+PANEL_UPDATE_URL="https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/update/sshplus.php"
 
 # Verificar root
 if [ "$EUID" -ne 0 ]; then
@@ -137,9 +137,9 @@ set_permissions() {
   chmod 755 /root
   chmod 777 /etc/SSHPlus/
   chmod 777 /etc/SSHPlus/senha/
-  [ -f "/root/usuarios.db" ]        && chmod 666 /root/usuarios.db
+  [ -f "/etc/SSHPlus/usuarios.db" ]        && chmod 666 /etc/SSHPlus/usuarios.db
   [ -f "/etc/SSHPlus/usuarios.db" ] && chmod 666 /etc/SSHPlus/usuarios.db
-  [ ! -f "/root/usuarios.db" ] && touch /root/usuarios.db && chmod 666 /root/usuarios.db
+  [ ! -f "/etc/SSHPlus/usuarios.db" ] && touch /etc/SSHPlus/usuarios.db && chmod 666 /etc/SSHPlus/usuarios.db
   echo -e "${GREEN}  ✓ Carpeta senha con permisos correctos${NC}"
   
   SUDOERS_LINE="${APACHE_USER} ALL=(ALL) NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/chpasswd, /usr/bin/chage, /usr/sbin/chage"
@@ -157,7 +157,7 @@ set_permissions() {
     cat >> $RC_LOCAL << 'EOF'
 # SSHPlus Manager - Permisos
 chmod 755 /root
-chmod 666 /root/usuarios.db 2>/dev/null
+chmod 666 /etc/SSHPlus/usuarios.db 2>/dev/null
 chmod 777 /etc/SSHPlus/ 2>/dev/null
 chmod 666 /etc/SSHPlus/usuarios.db 2>/dev/null
 chmod 777 /etc/SSHPlus/senha/ 2>/dev/null
@@ -254,7 +254,7 @@ install_sshplus() {
   echo -e "${YELLOW}  Descargando e instalando SSHPLUS...${NC}"
   echo -e "${YELLOW}  (Sigue las instrucciones en pantalla)${NC}"
   echo ""
-  wget -q https://raw.githubusercontent.com/rogellevi/SSHPLUS/master/Plus -O /tmp/Plus
+  wget -q https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Plus -O /tmp/Plus
   chmod 777 /tmp/Plus
   /tmp/Plus
   rm -f /tmp/Plus
@@ -767,7 +767,7 @@ uninstall_sshplus() {
   echo ""
   echo -e "${WHITE}  Esto eliminará:${NC}"
   echo -e "  ${RED}✗${NC} Panel Web y contraseña"
-  echo -e "  ${RED}✗${NC} Base de datos de usuarios (/root/usuarios.db)"
+  echo -e "  ${RED}✗${NC} Base de datos de usuarios (/etc/SSHPlus/usuarios.db)"
   echo -e "  ${RED}✗${NC} SSHPLUS (/etc/SSHPlus)"
   echo ""
   echo -e "${GREEN}  Se mantendrá:${NC}"
@@ -790,7 +790,7 @@ uninstall_sshplus() {
   rm -f /etc/apache2/sites-enabled/sshplus-ssl.conf
   
   echo -e "${YELLOW}  Eliminando SSHPLUS y usuarios...${NC}"
-  rm -rf /etc/SSHPlus /root/usuarios.db
+  rm -rf /etc/SSHPlus /etc/SSHPlus/usuarios.db
   
   echo -e "${YELLOW}  Limpiando configuraciones...${NC}"
   sed -i '/# SSHPLUS Manager Panel/d; /NOPASSWD: \/usr\/sbin\/useradd/d' /etc/sudoers
@@ -814,7 +814,7 @@ uninstall_all() {
   echo ""
   echo -e "${WHITE}  Esto eliminará:${NC}"
   echo -e "  ${RED}✗${NC} Panel Web y contraseña"
-  echo -e "  ${RED}✗${NC} Base de datos de usuarios (/root/usuarios.db)"
+  echo -e "  ${RED}✗${NC} Base de datos de usuarios (/etc/SSHPlus/usuarios.db)"
   echo -e "  ${RED}✗${NC} SSHPLUS (/etc/SSHPlus)"
   echo -e "  ${RED}✗${NC} Apache, PHP y Certificados SSL"
   echo ""
@@ -830,7 +830,7 @@ uninstall_all() {
 
   echo -e "${YELLOW}  Eliminando archivos...${NC}"
   rm -f /var/www/html/sshplus.php
-  rm -rf /etc/sshplus-panel /etc/SSHPlus /root/usuarios.db /etc/letsencrypt
+  rm -rf /etc/sshplus-panel /etc/SSHPlus /etc/SSHPlus/usuarios.db /etc/letsencrypt
   sed -i '/# SSHPLUS Manager Panel/d; /NOPASSWD: \/usr\/sbin\/useradd/d' /etc/sudoers
   sed -i '/# SSHPlus Manager - Permisos/,/exit 0/d' /etc/rc.local
   crontab -l 2>/dev/null | grep -v "certbot\|acme.sh" | crontab -

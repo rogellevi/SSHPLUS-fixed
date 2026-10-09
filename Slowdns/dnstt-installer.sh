@@ -2,7 +2,7 @@
 
 BIN_NAME="dnstt-manager"
 BIN_PATH="/usr/local/bin/$BIN_NAME"
-BIN_URL="https://github.com/kiritosshxd/SSHPLUS/raw/refs/heads/main/Slowdns/$BIN_NAME"
+BIN_URL="https://github.com/rogellevi/SSHPLUS-fixed/raw/refs/heads/main/Slowdns/$BIN_NAME"
 
 clear
 

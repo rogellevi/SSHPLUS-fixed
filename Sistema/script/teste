@@ -29,11 +29,11 @@ criarteste() {
     useradd -M -N -s /bin/false $usuario -e $tuserdate > /dev/null 2>&1
     (echo "$senha";echo "$senha") | passwd $usuario > /dev/null 2>&1
     echo "$senha" > /etc/SSHPlus/senha/$usuario
-    echo "$usuario $limite" >> /root/usuarios.db
+    echo "$usuario $limite" >> /etc/SSHPlus/usuarios.db
     echo "#!/bin/bash
 pkill -f "$usuario"
 userdel --force $usuario
-grep -v ^$usuario[[:space:]] /root/usuarios.db > /tmp/ph ; cat /tmp/ph > /root/usuarios.db
+grep -v ^$usuario[[:space:]] /etc/SSHPlus/usuarios.db > /tmp/ph ; cat /tmp/ph > /etc/SSHPlus/usuarios.db
 rm /etc/SSHPlus/senha/$usuario > /dev/null 2>&1
 rm -rf /etc/SSHPlus/userteste/$usuario.sh" > /etc/SSHPlus/userteste/$usuario.sh
     chmod +x /etc/SSHPlus/userteste/$usuario.sh
@@ -117,7 +117,7 @@ if useradd -M -N -s /bin/false $usuario -e $validade > /dev/null 2>/dev/null
         	info_data=$(date '+%d/%m/%C%y' -d " +$data days")
         	echo "$usuario:$senha:$info_data:$limite" > /etc/bot/info-users/$usuario
             limite $usuario $limite
-        	echo "$usuario $limite" >> /root/usuarios.db
+        	echo "$usuario $limite" >> /etc/SSHPlus/usuarios.db
             echo "$senha" > /etc/SSHPlus/senha/$usuario
 
         	local sucess
@@ -174,7 +174,7 @@ criaruser() {
     gui=$(date "+%d/%m/%Y" -d "+$dias days")
     pass=$(perl -e 'print crypt($ARGV[0], "password")' $senha)
     useradd -e $final -M -s /bin/false -p $pass $usuario >/dev/null 2>&1 &
-    echo "$usuario $limite" >>/root/usuarios.db
+    echo "$usuario $limite" >>/etc/SSHPlus/usuarios.db
     echo "$senha" >/etc/SSHPlus/senha/$usuario
     echo "usuario $usuario $validade $senha criado"
     echo "$usuario:$senha:$info_data:$limite" >$HOME/BOT/revenda/$user/usuarios/$usuario

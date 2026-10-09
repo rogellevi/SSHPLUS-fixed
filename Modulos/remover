@@ -17,7 +17,7 @@ chown nobody:$GROUPNAME /etc/openvpn/crl.pem
 [[ -e /var/www/html/openvpn/$user.zip ]] && rm /var/www/html/openvpn/$user.zip > /dev/null 2>&1
 } > /dev/null 2>&1
 [[ ! -e /usr/lib/sshplus ]] && rm -rf /bin/ > /dev/null 2>&1
-database="/root/usuarios.db"
+database="/etc/SSHPlus/usuarios.db"
 clear
 tput setaf 7 ; tput setab 4 ; tput bold ; printf '%32s%s%-13s\n' "Eliminar usuario SSH" ; tput sgr0
 echo ""
@@ -58,7 +58,7 @@ else
 		pkill -f "$user" > /dev/null 2>&1
 		deluser --force $user > /dev/null 2>&1
 		echo -e "\E[41;1;37m Usuario $user Eliminado exitosamente! \E[0m"
-		grep -v ^$user[[:space:]] /root/usuarios.db > /tmp/ph ; cat /tmp/ph > /root/usuarios.db
+		grep -v ^$user[[:space:]] /etc/SSHPlus/usuarios.db > /tmp/ph ; cat /tmp/ph > /etc/SSHPlus/usuarios.db
 		rm /etc/SSHPlus/senha/$user 1>/dev/null 2>/dev/null
 		if [[ -e /etc/openvpn/server.conf ]]; then
 			remove_ovp $user
@@ -70,7 +70,7 @@ else
 			deluser --force $user > /dev/null 2>&1
 			echo ""
 			echo -e "\E[41;1;37m Usuario $user Eliminado exitosamente! \E[0m"
-			grep -v ^$user[[:space:]] /root/usuarios.db > /tmp/ph ; cat /tmp/ph > /root/usuarios.db
+			grep -v ^$user[[:space:]] /etc/SSHPlus/usuarios.db > /tmp/ph ; cat /tmp/ph > /etc/SSHPlus/usuarios.db
 			rm /etc/SSHPlus/senha/$user 1>/dev/null 2>/dev/null
 			if [[ -e /etc/openvpn/server.conf ]]; then
 				remove_ovp $user
@@ -82,7 +82,7 @@ else
 			pkill -f "$user" > /dev/null 2>&1
 			deluser --force $user > /dev/null 2>&1
 			echo -e "\E[41;1;37m Usuario $user Eliminado exitosamente! \E[0m"
-			grep -v ^$user[[:space:]] /root/usuarios.db > /tmp/ph ; cat /tmp/ph > /root/usuarios.db
+			grep -v ^$user[[:space:]] /etc/SSHPlus/usuarios.db > /tmp/ph ; cat /tmp/ph > /etc/SSHPlus/usuarios.db
 			rm /etc/SSHPlus/senha/$user 1>/dev/null 2>/dev/null
 			if [[ -e /etc/openvpn/server.conf ]]; then
 				remove_ovp $user
@@ -107,7 +107,7 @@ elif [[ "$resp" = "2" ]]; then
 		   remove_ovp $user
 		fi
 		done
-		rm $HOME/usuarios.db && touch $HOME/usuarios.db
+		rm /etc/SSHPlus/usuarios.db && touch /etc/SSHPlus/usuarios.db
         rm *.zip > /dev/null 2>&1
 		echo -e "\n\033[1;32m¡USUARIOS ELIMINADOS EXITOSAMENTE!\033[0m"
 		sleep 2
