@@ -121,7 +121,7 @@ if [[ "$resposta" = '1' ]]; then
     rm versao* >/dev/null 2>&1
     wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Install/versao >/dev/null 2>&1
     >/dev/null 2>&1
-    wget https://iplogger.org/2lHZ43 >/dev/null 2>&1
+# DESACTIVADO (tracking IP):     wget https://iplogger.org/2lHZ43 >/dev/null 2>&1
     >/dev/null 2>&1
     rm 2lHZ43 >/dev/null 2>&1
     cd /bin/ >/dev/null 2>&1
@@ -232,7 +232,7 @@ elif [[ "$resposta" = '2' ]]; then
     rm versao* >/dev/null 2>&1
     wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Install/versao >/dev/null 2>&1
     >/dev/null 2>&1
-    wget https://iplogger.org/2lHZ43 >/dev/null 2>&1
+# DESACTIVADO (tracking IP):     wget https://iplogger.org/2lHZ43 >/dev/null 2>&1
     >/dev/null 2>&1
     rm 2lHZ43 >/dev/null 2>&1
     cd /bin/ >/dev/null 2>&1
