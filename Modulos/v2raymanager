@@ -437,75 +437,349 @@ err_fun () {
     }
 
 
-    install_v2panel () {
-    clear
-    echo -e "\E[44;1;37m            Instalar Panel Web V2Panel             \E[0m"
-    echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    if systemctl is-active --quiet v2panel 2>/dev/null || [[ -f /opt/v2panel/v2panel.py ]]; then
-        echo -e "\033[1;33mEl panel ya está instalado.\033[0m"
+    # ───────────── Panel Web V2Panel ─────────────
+    panel_need_install () {
+        if [[ ! -f /opt/v2panel/v2panel.py ]]; then
+            echo -e "\033[1;33mEl panel no está instalado. Usa la opción 1.\033[0m"
+            echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return 1
+        fi
+        return 0
+    }
+
+    panel_show_info () {
         if [[ -f /etc/v2panel/config.json ]]; then
-            PORT=$(python3 -c "import json;print(json.load(open('/etc/v2panel/config.json')).get('port',''))" 2>/dev/null)
-            SCHEME=$(python3 -c "import json;print('https' if json.load(open('/etc/v2panel/config.json')).get('https') else 'http')" 2>/dev/null)
-            IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-            echo -e "\033[1;37m  URL: \033[1;32m${SCHEME}://${IP}:${PORT}\033[0m"
-            echo -e "\033[1;37m  Token: \033[1;32m$(python3 /opt/v2panel/v2panel.py token 2>/dev/null)\033[0m"
+            _pp=$(python3 -c "import json;print(json.load(open('/etc/v2panel/config.json')).get('port',''))" 2>/dev/null)
+            _ps=$(python3 -c "import json;print('https' if json.load(open('/etc/v2panel/config.json')).get('https') else 'http')" 2>/dev/null)
+            _pi=$(hostname -I 2>/dev/null | awk '{print $1}')
+            _pt=$(python3 /opt/v2panel/v2panel.py token 2>/dev/null)
+            [[ -n "$_pp" ]] && echo -e "  \033[1;37mURL:\033[0m    \033[1;36m${_ps}://${_pi}:${_pp}/\033[0m"
+            [[ -n "$_pt" ]] && echo -e "  \033[1;37mToken:\033[0m  \033[1;33m${_pt}\033[0m"
+        fi
+    }
+
+    panel_restart () {
+        systemctl restart v2panel 2>/dev/null || true
+        sleep 1
+    }
+
+    install_v2panel () {
+        clear
+        echo -e "\E[44;1;37m            Instalar Panel Web V2Panel             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        if [[ -f /opt/v2panel/v2panel.py ]]; then
+            echo -e "\033[1;33mEl panel ya está instalado.\033[0m"
+            panel_show_info
+            echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return
+        fi
+        command -v python3 >/dev/null || { apt-get update -y && apt-get install -y python3; }
+        TMPDIR=$(mktemp -d)
+        echo -e "\033[1;33mDescargando archivos del panel...\033[0m"
+        if ! curl -fsSL "https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/Modulos/panel/v2panel.py" -o "$TMPDIR/v2panel.py"; then
+            echo -e "\033[1;31mError: no se pudo descargar v2panel.py\033[0m"
+            rm -rf "$TMPDIR"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return
+        fi
+        if ! curl -fsSL "https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/Modulos/panel/install.sh" -o "$TMPDIR/install.sh"; then
+            echo -e "\033[1;31mError: no se pudo descargar install.sh\033[0m"
+            rm -rf "$TMPDIR"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return
+        fi
+        chmod +x "$TMPDIR/install.sh"
+        bash "$TMPDIR/install.sh"
+        rm -rf "$TMPDIR"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+    }
+
+    update_v2panel () {
+        clear
+        echo -e "\E[44;1;37m            Actualizar Panel Web V2Panel             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        panel_need_install || return
+        echo -e "\033[1;33mDescargando última versión (se conservan contraseña, puerto y token)...\033[0m"
+        TMP=$(mktemp)
+        if ! curl -fsSL "https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/update/v2panel.py" -o "$TMP"; then
+            echo -e "\033[1;31mError: no se pudo descargar la actualización\033[0m"
+            rm -f "$TMP"
+            echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return
+        fi
+        if ! head -1 "$TMP" | grep -q python; then
+            echo -e "\033[1;31mEl archivo descargado no parece válido.\033[0m"
+            rm -f "$TMP"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return
+        fi
+        cp /opt/v2panel/v2panel.py "/opt/v2panel/v2panel.py.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+        install -m 700 "$TMP" /opt/v2panel/v2panel.py
+        rm -f "$TMP"
+        panel_restart
+        echo -e "\n\033[1;32m¡Panel actualizado correctamente!\033[0m"
+        echo -e "\033[1;37mConfiguración (contraseña, puerto, token) sin cambios.\033[0m"
+        panel_show_info
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+    }
+
+    panel_change_pass () {
+        clear
+        echo -e "\E[44;1;37m            Cambiar contraseña del panel             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        panel_need_install || return
+        python3 -c '
+import getpass, json, os, secrets, hashlib
+CFG = "/etc/v2panel/config.json"
+def hash_pw(pw, salt=None, iters=200000):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), iters).hex()
+    return "pbkdf2$%d$%s$%s" % (iters, salt, h)
+if not os.path.exists(CFG):
+    print("No hay configuración del panel.")
+    raise SystemExit(1)
+while True:
+    p1 = getpass.getpass("Nueva contraseña (mín. 8 caracteres): ")
+    if len(p1) < 8:
+        print("Muy corta.")
+        continue
+    if p1 != getpass.getpass("Repite la contraseña: "):
+        print("No coinciden.")
+        continue
+    break
+with open(CFG, encoding="utf-8") as f:
+    cfg = json.load(f)
+cfg["password_hash"] = hash_pw(p1)
+tmp = CFG + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, CFG)
+print("Contraseña actualizada.")
+'
+        panel_restart
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+    }
+
+    panel_change_port () {
+        clear
+        echo -e "\E[44;1;37m            Cambiar puerto del panel             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        panel_need_install || return
+        OLD=$(python3 -c "import json;print(json.load(open('/etc/v2panel/config.json')).get('port',8085))" 2>/dev/null)
+        echo -e "\033[1;37mPuerto actual: \033[1;32m${OLD}\033[0m"
+        while true; do
+            echo -ne "\033[1;33mNuevo puerto (1-65535): \033[0m"
+            read newport
+            if [[ -z "$newport" ]]; then
+                echo -e "\033[1;31mPuerto nulo\033[0m"
+                continue
+            elif [[ ! "$newport" =~ ^[0-9]+$ ]] || [[ "$newport" -lt 1 || "$newport" -gt 65535 ]]; then
+                echo -e "\033[1;31mPuerto no válido\033[0m"
+                continue
+            fi
+            break
+        done
+        python3 -c "
+import json, os
+CFG='/etc/v2panel/config.json'
+with open(CFG, encoding='utf-8') as f:
+    cfg=json.load(f)
+cfg['port']=int('$newport')
+tmp=CFG+'.tmp'
+with open(tmp,'w',encoding='utf-8') as f:
+    json.dump(cfg,f,indent=2)
+    f.write('\n')
+os.chmod(tmp,0o600)
+os.replace(tmp,CFG)
+print('Puerto guardado:', cfg['port'])
+"
+        panel_restart
+        if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+            ufw allow "${newport}/tcp" >/dev/null 2>&1 || true
+            echo -e "\033[1;37mufw: puerto ${newport} abierto\033[0m"
+        fi
+        panel_show_info
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+    }
+
+    panel_token_menu () {
+        clear
+        echo -e "\E[44;1;37m            Token del panel (API maestro)             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        panel_need_install || return
+        echo -e "\033[1;37mToken actual:\033[0m"
+        echo -e "  \033[1;33m$(python3 /opt/v2panel/v2panel.py token 2>/dev/null)\033[0m"
+        echo ""
+        echo -e "\033[1;37m[1]\033[0m) Regenerar token (el anterior dejará de valer)"
+        echo -e "\033[1;37m[0]\033[0m) Volver sin cambios"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -ne "\033[1;32mSelecciona: \033[0m"
+        read tsel
+        if [[ "$tsel" == "1" ]]; then
+            NEW=$(python3 /opt/v2panel/v2panel.py token-new 2>/dev/null)
+            panel_restart
+            echo -e "\n\033[1;32mNuevo token:\033[0m"
+            echo -e "  \033[1;33m${NEW}\033[0m"
+            echo -e "\033[1;31mActualiza el token en tu panel maestro.\033[0m"
         fi
         echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
         echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
-        fun_v2raymanager
-        return
-    fi
-    command -v python3 >/dev/null || { apt-get update -y && apt-get install -y python3; }
-    TMPDIR=$(mktemp -d)
-    echo -e "\033[1;33mDescargando archivos del panel...\033[0m"
-    if ! curl -fsSL "https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/Modulos/panel/v2panel.py" -o "$TMPDIR/v2panel.py"; then
-        echo -e "\033[1;31mError: no se pudo descargar v2panel.py\033[0m"
-        rm -rf "$TMPDIR"
-        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
-        fun_v2raymanager
-        return
-    fi
-    if ! curl -fsSL "https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/Modulos/panel/install.sh" -o "$TMPDIR/install.sh"; then
-        echo -e "\033[1;31mError: no se pudo descargar install.sh\033[0m"
-        rm -rf "$TMPDIR"
-        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
-        fun_v2raymanager
-        return
-    fi
-    chmod +x "$TMPDIR/install.sh"
-    bash "$TMPDIR/install.sh"
-    rm -rf "$TMPDIR"
-    echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
-    fun_v2raymanager
     }
 
     uninstall_v2panel () {
-    clear
-    echo -e "\E[44;1;37m            Desinstalar Panel Web V2Panel             \E[0m"
-    echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    if [[ ! -f /opt/v2panel/v2panel.py ]] && ! systemctl list-unit-files 2>/dev/null | grep -q v2panel; then
-        echo -e "\033[1;33mEl panel no está instalado.\033[0m"
+        clear
+        echo -e "\E[44;1;37m            Desinstalar Panel Web V2Panel             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        if [[ ! -f /opt/v2panel/v2panel.py ]] && ! systemctl list-unit-files 2>/dev/null | grep -q v2panel; then
+            echo -e "\033[1;33mEl panel no está instalado.\033[0m"
+            echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+            echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+            return
+        fi
+        echo -ne "\033[1;31m¿Desinstalar V2Panel? (s/n): \033[0m"
+        read conf
+        [[ "$conf" != "s" && "$conf" != "S" ]] && return
+        systemctl stop v2panel 2>/dev/null || true
+        systemctl disable v2panel 2>/dev/null || true
+        rm -f /etc/systemd/system/v2panel.service
+        systemctl daemon-reload 2>/dev/null || true
+        rm -rf /opt/v2panel /etc/v2panel
+        echo -e "\n\033[1;32m¡V2Panel eliminado correctamente!\033[0m"
         echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
         echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
-        fun_v2raymanager
-        return
-    fi
-    echo -ne "\033[1;31m¿Desinstalar V2Panel? (s/n): \033[0m"
-    read conf
-    [[ "$conf" != "s" && "$conf" != "S" ]] && {
-        fun_v2raymanager
-        return
     }
-    systemctl stop v2panel 2>/dev/null || true
-    systemctl disable v2panel 2>/dev/null || true
-    rm -f /etc/systemd/system/v2panel.service
-    systemctl daemon-reload 2>/dev/null || true
-    rm -rf /opt/v2panel /etc/v2panel
-    echo -e "\n\033[1;32m¡V2Panel eliminado correctamente!\033[0m"
-    echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
-    fun_v2raymanager
+
+    panel_https_toggle () {
+        clear
+        echo -e "\E[44;1;37m            HTTPS del Panel Web             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        panel_need_install || return
+        CUR=$(python3 -c "import json;print('on' if json.load(open('/etc/v2panel/config.json')).get('https') else 'off')" 2>/dev/null)
+        if [[ "$CUR" == "on" ]]; then
+            echo -e "  \033[1;32mEstado HTTPS:\033[0m  \033[1;32mActivado\033[0m"
+            CRT=$(python3 -c "import json;print(json.load(open('/etc/v2panel/config.json')).get('tls_cert',''))" 2>/dev/null)
+            [[ -n "$CRT" ]] && echo -e "  \033[1;37mCertificado:\033[0m  \033[1;36m${CRT}\033[0m"
+        else
+            echo -e "  \033[1;32mEstado HTTPS:\033[0m  \033[1;31mDesactivado\033[0m"
+        fi
+        echo ""
+        echo -e "\033[1;37m[1]\033[0m) Activar HTTPS (certificados de V2Ray)"
+        echo -e "\033[1;37m[2]\033[0m) Desactivar HTTPS"
+        echo -e "\033[1;37m[0]\033[0m) Volver"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -ne "\033[1;32mSelecciona: \033[0m"
+        read hsel
+        case $hsel in
+        1)
+            echo -e "\033[1;33mBuscando certificado de V2Ray...\033[0m"
+            OUT=$(python3 /opt/v2panel/v2panel.py https 2>&1)
+            EC=$?
+            echo "$OUT"
+            if echo "$OUT" | grep -qi "HTTPS activado\|activado con"; then
+                panel_restart
+                echo -e "\033[1;32mHTTPS activado. Usa el dominio del certificado (no solo la IP).\033[0m"
+            elif [[ $EC -ne 0 ]] || echo "$OUT" | grep -qi "No encontr\|No se pudo\|error\|Error"; then
+                echo -e "\033[1;33mSi V2Ray no tiene TLS, indica las rutas a mano:\033[0m"
+                echo -ne "\033[1;33mRuta del certificado (.crt/.pem) o ENTER para cancelar: \033[0m"
+                read CRT
+                [[ -z "$CRT" ]] && {
+                    echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+                    return
+                }
+                echo -ne "\033[1;33mRuta de la llave (.key): \033[0m"
+                read KEY
+                python3 /opt/v2panel/v2panel.py https "$CRT" "$KEY"
+                panel_restart
+            else
+                panel_restart
+            fi
+            ;;
+        2)
+            python3 /opt/v2panel/v2panel.py https off
+            panel_restart
+            echo -e "\033[1;32mHTTPS desactivado. El panel queda en HTTP.\033[0m"
+            ;;
+        *)
+            return
+            ;;
+        esac
+        panel_show_info
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+    }
+
+    panel_restart_only () {
+        clear
+        echo -e "\E[44;1;37m            Reiniciar Panel Web V2Panel             \E[0m"
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        panel_need_install || return
+        echo -e "\033[1;33mReiniciando servicio v2panel...\033[0m"
+        systemctl restart v2panel 2>/dev/null
+        sleep 1
+        if systemctl is-active --quiet v2panel 2>/dev/null || pgrep -f "/opt/v2panel/v2panel.py" >/dev/null 2>&1; then
+            echo -e "\033[1;32m¡Panel reiniciado correctamente!\033[0m"
+        else
+            echo -e "\033[1;31mNo se pudo reiniciar. Revisa: journalctl -u v2panel -e\033[0m"
+        fi
+        panel_show_info
+        echo -e "\033[0;34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+        echo -e "\033[1;37m• \033[1;33mPresiona ENTER para continuar\033[1;31m" && read enter
+    }
+
+    fun_panelmenu () {
+        while true; do
+            clear
+            echo -e "\033[0;34m╔══════════════════════════════════════════════════╗\033[0m"
+            echo -e "\033[0;34m║\033[0m\033[1;37m               \033[1;36mPANEL WEB V2PANEL\033[1;37m                 \033[0;34m║\033[0m"
+            echo -e "\033[0;34m╚══════════════════════════════════════════════════╝\033[0m"
+            if systemctl is-active --quiet v2panel 2>/dev/null || pgrep -f "/opt/v2panel/v2panel.py" >/dev/null 2>&1; then
+                echo -e "  \033[1;32mEstado:\033[0m  \033[1;32mActivado\033[0m"
+            else
+                if [[ -f /opt/v2panel/v2panel.py ]]; then
+                    echo -e "  \033[1;32mEstado:\033[0m  \033[1;31mDetenido\033[0m"
+                else
+                    echo -e "  \033[1;32mEstado:\033[0m  \033[1;31mNo instalado\033[0m"
+                fi
+            fi
+            panel_show_info
+            echo ""
+            echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
+            echo ""
+            echo -e "  \033[1;36m01\033[0m) \033[1;37mInstalar panel\033[0m"
+            echo -e "  \033[1;36m02\033[0m) \033[1;37mActualizar panel\033[0m \033[1;33m(mantiene config)\033[0m"
+            echo -e "  \033[1;36m03\033[0m) \033[1;37mCambiar contraseña\033[0m"
+            echo -e "  \033[1;36m04\033[0m) \033[1;37mCambiar puerto\033[0m"
+            echo -e "  \033[1;36m05\033[0m) \033[1;37mVer / regenerar token\033[0m"
+            echo -e "  \033[1;36m06\033[0m) \033[1;37mReiniciar panel\033[0m"
+            echo -e "  \033[1;36m07\033[0m) \033[1;37mActivar / desactivar HTTPS\033[0m"
+            echo -e "  \033[1;36m08\033[0m) \033[1;37mDesinstalar panel\033[0m"
+            echo -e "  \033[1;36m00\033[0m) \033[1;32m‹ Volver\033[0m"
+            echo ""
+            echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
+            echo -ne "  \033[1;32mSelecciona una opción:\033[0m "
+            read px
+            case $px in
+            1|01) install_v2panel ;;
+            2|02) update_v2panel ;;
+            3|03) panel_change_pass ;;
+            4|04) panel_change_port ;;
+            5|05) panel_token_menu ;;
+            6|06) panel_restart_only ;;
+            7|07) panel_https_toggle ;;
+            8|08) uninstall_v2panel ;;
+            0|00) return ;;
+            *) echo -e "\033[1;31mOpción no válida.\033[0m"; sleep 1 ;;
+            esac
+        done
     }
 
     selection_fun () {
@@ -547,7 +821,7 @@ err_fun () {
 				xpanel1="\033[1;31mDesactivado\033[0m"
 				xpanel="\033[1;31m○ "
 			fi
-			echo -e "  \033[1;32mEstado:\033[37m  V2Ray $xv2ray1  |  \033[37m V2Panel $xpanel1"
+			echo -e "  \033[1;32mEstado:\033[0m  V2Ray $xv2ray1  |  Panel $xpanel1"
 			if [[ -f /opt/v2panel/v2panel.py && -f /etc/v2panel/config.json ]]; then
 				_pp=$(python3 -c "import json;print(json.load(open('/etc/v2panel/config.json')).get('port',''))" 2>/dev/null)
 				_ps=$(python3 -c "import json;print('https' if json.load(open('/etc/v2panel/config.json')).get('https') else 'http')" 2>/dev/null)
@@ -571,9 +845,8 @@ err_fun () {
 			echo -e "  \033[1;36m10\033[0m) \033[1;37mLimitador por consumo\033[0m \033[1;31m(beta)\033[0m"
 			echo -e "  \033[1;36m11\033[0m) \033[1;37mLimpiador de expirados\033[0m $statgen"
 			echo -e "  \033[1;36m12\033[0m) \033[1;37mDesinstalar V2Ray\033[0m"
-			echo -e "  \033[1;36m13\033[0m) \033[1;37mInstalar Panel Web V2Panel\033[0m $xpanel"
-			echo -e "  \033[1;36m14\033[0m) \033[1;37mDesinstalar Panel Web\033[0m"
-			echo -e "  \033[1;36m15\033[0m) \033[1;32m‹ Volver\033[0m"
+			echo -e "  \033[1;36m13\033[0m) \033[1;37mPanel Web V2Panel\033[0m $xpanel"
+			echo -e "  \033[1;36m14\033[0m) \033[1;32m‹ Volver\033[0m"
 			echo -e "  \033[1;36m00\033[0m) \033[1;31mSalir\033[0m"
 			echo ""
 			echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
@@ -618,12 +891,9 @@ err_fun () {
 				unistallv2
 				;;
             13 | 13)
-				install_v2panel
+				fun_panelmenu
 				;;
             14 | 14)
-				uninstall_v2panel
-				;;
-            15 | 15)
 				conexao
                 exit;
 				;;
