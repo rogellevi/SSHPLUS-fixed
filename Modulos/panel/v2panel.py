@@ -18,7 +18,6 @@ import os
 import re
 import secrets
 import shutil
-import ssl
 import subprocess
 import sys
 import threading
@@ -30,7 +29,6 @@ from urllib.parse import urlparse, parse_qs
 
 # ---------------------------------------------------------------- rutas ----
 PANEL_CFG = os.environ.get("V2PANEL_CONFIG", "/etc/v2panel/config.json")
-NETDEV = os.environ.get("V2PANEL_NETDEV", "/proc/net/dev")
 REG = os.environ.get("V2PANEL_REGISTRY", "/etc/SSHPlus/RegV2ray")
 V2CFG = os.environ.get("V2PANEL_V2RAY_CONFIG", "/etc/v2ray/config.json")
 BACKUP_DIR = os.path.join(os.path.dirname(PANEL_CFG), "backups")
@@ -252,20 +250,6 @@ def restart_v2ray():
     return False
 
 
-def service_cmd(action):
-    """Detiene o inicia V2Ray y confirma el resultado mirando el estado real del servicio."""
-    want_running = (action == "start")
-    for cmd in (["systemctl", action, "v2ray"], ["v2ray", action]):
-        try:
-            subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=40)
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-        time.sleep(1)
-        if v2ray_status() == want_running:
-            return True
-    return False
-
-
 def v2ray_status():
     try:
         r = subprocess.run(["systemctl", "is-active", "v2ray"], capture_output=True, text=True, timeout=5)
@@ -309,7 +293,7 @@ def build_link(u, host_hint):
 
 
 # -------------------------------------------------------------- acciones ----
-def add_user(nick, days, uid=None):
+def add_user(nick, days):
     if not NICK_RE.match(nick or ""):
         raise ApiError("Usuario inválido: 2-32 caracteres (letras, números, punto, guion o guion bajo)")
     if not isinstance(days, int) or days < 1 or days > MAX_DAYS:
@@ -318,17 +302,7 @@ def add_user(nick, days, uid=None):
         users = read_registry()
         if any(u["nick"].lower() == nick.lower() for u in users):
             raise ApiError("El usuario ya existe", 409)
-        if uid:
-            uid = uid.lower()
-            try:
-                with open(V2CFG, encoding="utf-8") as f:
-                    taken = uid in ids_of(f.read())
-            except FileNotFoundError:
-                taken = False
-            if taken or any(u["uuid"].lower() == uid for u in users):
-                raise ApiError("El UUID ya existe en este VPS", 409)
-        else:
-            uid = str(uuidlib.uuid4())
+        uid = str(uuidlib.uuid4())
         mail = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(10)) + "@gmail.com"
         apply_config(adds=[{"alterId": 0, "id": uid, "email": mail}])
         exp = (date.today() + timedelta(days=days)).isoformat()
@@ -405,111 +379,18 @@ def find_by_nick(nick):
     return u
 
 
-def _cpu_times():
-    with open("/proc/stat") as f:
-        p = [int(x) for x in f.readline().split()[1:]]
-    return sum(p), p[3] + (p[4] if len(p) > 4 else 0)  # total, inactivo (idle + iowait)
-
-
-def _cpu_pct(a, b):
-    return max(0, min(100, round(100 * (1 - (b[1] - a[1]) / max(b[0] - a[0], 1)))))
-
-
 def cpu_percent():
+    def rd():
+        with open("/proc/stat") as f:
+            p = [int(x) for x in f.readline().split()[1:]]
+        return sum(p), p[3] + (p[4] if len(p) > 4 else 0)
     try:
-        a = _cpu_times()
+        t1, i1 = rd()
         time.sleep(0.25)
-        return _cpu_pct(a, _cpu_times())
+        t2, i2 = rd()
+        return max(0, min(100, round(100 * (1 - (i2 - i1) / max(t2 - t1, 1)))))
     except Exception:
         return 0
-
-
-CPU_LAST = {"v": None}
-NET_LAST = {"rx": 0.0, "tx": 0.0}
-
-
-def net_totals():
-    """Bytes recibidos y enviados desde el arranque (suma de interfaces reales, sin lo/docker/veth)."""
-    rx = tx = 0
-    try:
-        with open(NETDEV) as f:
-            for line in list(f)[2:]:
-                name, _, data = line.partition(":")
-                name = name.strip()
-                if not data or name == "lo" or name.startswith(("docker", "veth", "br-", "virbr")):
-                    continue
-                p = data.split()
-                rx += int(p[0])
-                tx += int(p[8])
-    except Exception:
-        pass
-    return rx, tx
-
-
-def sys_sampler():
-    """Mide CPU y velocidad de red en segundo plano cada 2 s (la respuesta es instantánea)."""
-    try:
-        prev = _cpu_times()
-    except Exception:
-        prev = None
-    pn, pt = net_totals(), time.monotonic()
-    while True:
-        time.sleep(2)
-        now = time.monotonic()
-        dt = max(now - pt, 0.001)
-        try:
-            if prev is not None:
-                cur = _cpu_times()
-                CPU_LAST["v"] = _cpu_pct(prev, cur)
-                prev = cur
-        except Exception:
-            pass
-        cn = net_totals()
-        NET_LAST["rx"] = max(0.0, (cn[0] - pn[0]) / dt)  # si el contador se reinicia, queda en 0
-        NET_LAST["tx"] = max(0.0, (cn[1] - pn[1]) / dt)
-        pn, pt = cn, now
-
-
-def uptime_seconds():
-    try:
-        with open("/proc/uptime") as f:
-            return int(float(f.read().split()[0]))
-    except Exception:
-        return None
-
-
-def mem_info():
-    try:
-        m = {}
-        with open("/proc/meminfo") as f:
-            for line in f:
-                k, _, v = line.partition(":")
-                m[k] = int(v.split()[0]) * 1024
-        total = m["MemTotal"]
-        used = total - m["MemAvailable"]
-        return used, total
-    except Exception:
-        return 0, 0
-
-
-def system_stats():
-    cpu = CPU_LAST["v"] if CPU_LAST["v"] is not None else cpu_percent()
-    mu, mt = mem_info()
-    try:
-        du = shutil.disk_usage("/")
-        dused, dtotal = du.used, du.total
-    except Exception:
-        dused, dtotal = 0, 0
-    pct = lambda a, b: round(100 * a / b) if b else 0
-    return {
-        "cpu": {"pct": cpu, "cores": os.cpu_count() or 1},
-        "mem": {"pct": pct(mu, mt), "used": mu, "total": mt},
-        "disk": {"pct": pct(dused, dtotal), "used": dused, "total": dtotal},
-        "uptime": uptime_str(),
-        "uptime_s": uptime_seconds(),
-        "net": {"rx_rate": int(NET_LAST["rx"]), "tx_rate": int(NET_LAST["tx"]),
-                "rx_total": net_totals()[0], "tx_total": net_totals()[1]},
-    }
 
 
 def mem_percent():
@@ -588,10 +469,7 @@ def agent_action(action, f, host):
     if action == "info":
         return build_info()
     if action == "create":
-        want = str(f.get("uuid", "")).strip()
-        if want and not UUID_RE.match(want):
-            raise ApiError("UUID inválido")
-        r = add_user(nick, to_int(f.get("days")), want or None)
+        r = add_user(nick, to_int(f.get("days")))
         link = build_link(r, host)
         return {"ok": True, "msg": "Usuario V2Ray creado", "username": r["nick"], "password": r["uuid"],
                 "uuid": r["uuid"], "expiry": r["exp"], "limit": 1, "ip": host, "link": link}
@@ -636,100 +514,9 @@ def valid_token(tok, secret):
         return False
 
 
-# --------------------------------------------------------------------- TLS ----
-def detect_cert():
-    """Busca en config.json de V2Ray el certificado (y llave) que ya usa para TLS."""
-    try:
-        with open(V2CFG, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception:
-        return None
-    inbounds = cfg.get("inbounds") or ([cfg["inbound"]] if "inbound" in cfg else [])
-    for ib in inbounds:
-        ss = ib.get("streamSettings") or {}
-        for key in ("tlsSettings", "xtlsSettings"):
-            for c in (ss.get(key) or {}).get("certificates") or []:
-                crt, k = c.get("certificateFile"), c.get("keyFile")
-                if crt and k and os.path.isfile(crt) and os.path.isfile(k):
-                    return crt, k
-    return None
-
-
-def cert_summary(crt):
-    try:
-        r = subprocess.run(["openssl", "x509", "-in", crt, "-noout", "-subject", "-enddate"],
-                           capture_output=True, text=True, timeout=5)
-        return r.stdout.strip().replace("\n", " | ") if r.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
-def make_ssl_context(crt, key):
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.load_cert_chain(crt, key)
-    return ctx
-
-
-def cert_reload_loop(ctx, crt, key):
-    """Si el certificado se renueva (acme, certbot...), lo recarga sin reiniciar el panel."""
-    try:
-        last = os.path.getmtime(crt)
-    except OSError:
-        last = 0
-    while True:
-        time.sleep(6 * 3600)
-        try:
-            m = os.path.getmtime(crt)
-            if m != last:
-                ctx.load_cert_chain(crt, key)
-                last = m
-                print("Certificado SSL recargado", flush=True)
-        except Exception as e:
-            print("No se pudo recargar el certificado:", e, file=sys.stderr, flush=True)
-
-
-def https_cmd(args):
-    """python3 v2panel.py https [CERT KEY | off]"""
-    if not os.path.exists(PANEL_CFG):
-        sys.exit("Primero ejecuta: python3 %s setup" % sys.argv[0])
-    cfg = load_panel_cfg()
-    if args and args[0] == "off":
-        cfg["https"] = False
-        save_panel_cfg(cfg)
-        return print("HTTPS desactivado. Reinicia el panel: systemctl restart v2panel")
-    if len(args) >= 2:
-        crt, key = args[0], args[1]
-    else:
-        found = detect_cert()
-        if not found:
-            return print("No encontré un certificado en la configuración de V2Ray.\n"
-                         "Indícalo a mano: python3 %s https /ruta/cert.crt /ruta/llave.key" % sys.argv[0])
-        crt, key = found
-    try:
-        make_ssl_context(crt, key)
-    except Exception as e:
-        return print("No se pudo usar ese certificado:", e)
-    cfg.update({"https": True, "tls_cert": crt, "tls_key": key})
-    save_panel_cfg(cfg)
-    print("HTTPS activado con:\n  certificado:", crt, "\n  llave:      ", key)
-    info = cert_summary(crt)
-    if info:
-        print("  ", info)
-    print("\nReinicia el panel:  systemctl restart v2panel")
-    print("Ábrelo con el DOMINIO del certificado: https://TU_DOMINIO:%s/" % cfg.get("port", 8085))
-    print("En tu panel maestro, cambia la URL del VPS a https://...")
-
-
 # -------------------------------------------------------------------- HTTP ---
 class Handler(BaseHTTPRequestHandler):
     server_version = "v2panel"
-
-    def setup(self):
-        if isinstance(self.request, ssl.SSLSocket):
-            self.request.settimeout(10)
-            self.request.do_handshake()
-        super().setup()
 
     def log_message(self, *a):
         pass
@@ -747,8 +534,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy",
-                         "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
-                         "font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; "
+                         "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                          "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
         if cookie:
             self.send_header("Set-Cookie", cookie)
@@ -756,8 +542,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def cookie_flags(self):
-        tls = isinstance(self.connection, ssl.SSLSocket)
-        sec = "; Secure" if tls or self.headers.get("X-Forwarded-Proto") == "https" else ""
+        sec = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
         return "; HttpOnly; SameSite=Strict; Path=/" + sec
 
     def authed(self, cfg):
@@ -844,21 +629,17 @@ class Handler(BaseHTTPRequestHandler):
                 users = [enrich(u) for u in read_registry()]
                 users.sort(key=lambda u: (u["days"] is None, u["days"] if u["days"] is not None else 0))
                 return self.send(200, {
-                    "users": users, "running": v2ray_status(), "system": system_stats(),
+                    "users": users, "running": v2ray_status(),
                     "settings": {"host": cfg.get("host", ""), "auto_clean": bool(cfg.get("auto_clean")),
                                  "api_token": cfg.get("api_token", "")},
                     "max_days": MAX_DAYS,
                 })
-            if method == "GET" and path == "/api/system":
-                return self.send(200, system_stats())
             if method == "POST" and path == "/api/users":
                 r = add_user(str(body.get("nick", "")).strip(), body.get("days"))
                 r["link"] = build_link(r, (self.headers.get("Host") or "").split(":")[0])
                 return self.send(200, r)
             if method == "POST" and m and m.group(2) == "renew":
                 return self.send(200, renew_user(m.group(1), body.get("days")))
-            if method == "POST" and m and m.group(2) == "setdays":
-                return self.send(200, renew_user(m.group(1), body.get("days"), reset=True))
             if method == "GET" and m and m.group(2) == "link":
                 u = next((x for x in read_registry() if x["uuid"].lower() == m.group(1).lower()), None)
                 if not u:
@@ -871,9 +652,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, delete_users([m.group(1)]))
             if method == "POST" and path == "/api/clean":
                 return self.send(200, clean_expired())
-            if method == "POST" and path in ("/api/stop", "/api/start"):
-                ok = service_cmd(path.rsplit("/", 1)[1])
-                return self.send(200, {"ok": ok, "running": v2ray_status()})
             if method == "POST" and path == "/api/restart":
                 return self.send(200, {"restarted": restart_v2ray()})
             if method == "POST" and path == "/api/settings":
@@ -917,13 +695,6 @@ class Handler(BaseHTTPRequestHandler):
         self.dispatch("DELETE")
 
 
-class PanelServer(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def handle_error(self, request, client_address):
-        pass  # p. ej. alguien abre http:// en un puerto que ahora es https://
-
-
 # ------------------------------------------------------------------- setup ---
 def setup():
     cfg = {}
@@ -949,26 +720,14 @@ def setup():
         "api_token": cfg.get("api_token") or secrets.token_hex(24),
         "api_allow": cfg.get("api_allow", []),
     })
-    found = detect_cert()
-    if found and not cfg.get("https"):
-        try:
-            ans = input("Encontré el certificado SSL de V2Ray (%s).\n¿Usarlo para abrir el panel con HTTPS? [s/N]: " % found[0]).strip().lower()
-        except EOFError:
-            ans = ""
-        if ans in ("s", "si", "sí", "y", "yes"):
-            cfg.update({"https": True, "tls_cert": found[0], "tls_key": found[1]})
     save_panel_cfg(cfg)
     print("Configuración guardada en", PANEL_CFG)
     print("Token para el panel maestro:", cfg["api_token"])
-    if cfg.get("https"):
-        print("HTTPS activado. Ábrelo con el dominio del certificado: https://TU_DOMINIO:%s/" % cfg["port"])
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("setup", "passwd"):
         return setup()
-    if len(sys.argv) > 1 and sys.argv[1] == "https":
-        return https_cmd(sys.argv[2:])
     if not os.path.exists(PANEL_CFG):
         sys.exit("Falta configuración. Ejecuta: python3 %s setup" % sys.argv[0])
     cfg = load_panel_cfg()
@@ -979,18 +738,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("token", "token-new"):
         return print(cfg["api_token"])
     threading.Thread(target=auto_clean_loop, daemon=True).start()
-    threading.Thread(target=sys_sampler, daemon=True).start()
-    srv = PanelServer((cfg.get("bind", "0.0.0.0"), int(cfg.get("port", 8085))), Handler)
-    scheme = "http"
-    if cfg.get("https"):
-        try:
-            ctx = make_ssl_context(cfg["tls_cert"], cfg["tls_key"])
-            srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
-            threading.Thread(target=cert_reload_loop, args=(ctx, cfg["tls_cert"], cfg["tls_key"]), daemon=True).start()
-            scheme = "https"
-        except Exception as e:
-            print("!! HTTPS no disponible (%s). Sirviendo en HTTP sin cifrar." % e, file=sys.stderr, flush=True)
-    print("V2Panel escuchando en %s://%s:%s" % (scheme, cfg.get("bind"), cfg.get("port")), flush=True)
+    srv = ThreadingHTTPServer((cfg.get("bind", "0.0.0.0"), int(cfg.get("port", 8085))), Handler)
+    print("V2Panel escuchando en %s:%s" % (cfg.get("bind"), cfg.get("port")), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -1001,454 +750,157 @@ def main():
 INDEX_HTML = r"""<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#060b14">
-<title>Panel V2Ray</title>
-<script>
-(function(){var t=null;try{t=localStorage.getItem('sshplus_theme')}catch(e){}if(!t||['dark','light','paper','gaming'].indexOf(t)<0)t='dark';document.documentElement.setAttribute('data-theme',t);})();
-</script>
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>V2Panel</title>
 <style>
-/* ───────── Temas (mismos tokens del Panel VPS) ───────── */
-:root,[data-theme="dark"]{--bg-body:#060b14;--bg-card:#0d1321;--bg-card-alt:#0a1525;--bg-input:#0a0f1a;--bg-hover:rgba(0,200,255,0.04);--border:#1e3a5f;--border-soft:#0e2a45;--text:#e0f0ff;--text-muted:#3a7ca5;--text-soft:#7eb8ff;--accent:#00c8ff;--accent-2:#00ff9d;--accent-3:#ff4d6d;--accent-4:#ffbe0b;--glow:rgba(0,180,255,0.15);--glow-strong:rgba(0,200,255,0.4);--grid-color:rgba(0,200,255,0.03);--font-main:'Share Tech Mono',monospace;--font-title:'Orbitron',monospace;--radius:14px;--radius-sm:8px;--scanline-opacity:1;--grid-opacity:1;--card-glow:0 0 60px rgba(0,180,255,0.15);--neon-text-shadow:0 0 20px;--bar-glow:0 0 8px;--dropdown-shadow:0 8px 30px rgba(0,0,0,0.5),0 0 20px rgba(0,200,255,0.1);color-scheme:dark}
-[data-theme="light"]{--bg-body:#f0f4f8;--bg-card:#fff;--bg-card-alt:#f7fafc;--bg-input:#fff;--bg-hover:rgba(0,100,200,0.06);--border:#d8e0e8;--border-soft:#e8edf2;--text:#1a2332;--text-muted:#6b7a8f;--text-soft:#3a5068;--accent:#0077cc;--accent-2:#00a86b;--accent-3:#d93652;--accent-4:#e89a00;--glow:rgba(0,100,200,0.08);--glow-strong:rgba(0,100,200,0.15);--grid-color:rgba(0,100,200,0.04);--font-main:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--font-title:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--radius:12px;--radius-sm:8px;--scanline-opacity:0;--grid-opacity:.5;--card-glow:0 2px 20px rgba(0,0,0,0.06);--neon-text-shadow:none;--bar-glow:none;--dropdown-shadow:0 8px 24px rgba(0,0,0,0.12);color-scheme:light}
-[data-theme="paper"]{
-  --bg-body:#f4f1ea;--bg-card:#fbfaf5;--bg-card-alt:#f7f3e8;--bg-input:#fdfcf7;--bg-hover:rgba(120,90,50,0.06);
-  --border:#d4c9a8;--border-soft:#e6ddc2;--text:#3d3833;--text-muted:#8a7a5c;--text-soft:#6b5d45;
-  --accent:#8b5a2b;--accent-2:#5a7a3a;--accent-3:#a84032;--accent-4:#c89030;
-  --glow:rgba(120,90,50,0.1);--glow-strong:rgba(120,90,50,0.15);--grid-color:rgba(120,90,50,0.06);
-  --font-main:'Inter','Segoe UI',system-ui,sans-serif;--font-title:'Playfair Display','Lora',Georgia,serif;
-  --radius:6px;--radius-sm:4px;--scanline-opacity:0;--grid-opacity:.4;
-  --card-glow:0 2px 12px rgba(120,90,50,0.08);--neon-text-shadow:none;--bar-glow:none;--dropdown-shadow:0 8px 20px rgba(120,90,50,0.15);color-scheme:light}
-[data-theme="gaming"]{--bg-body:#08000f;--bg-card:#110020;--bg-card-alt:#0d001a;--bg-input:#0a0015;--bg-hover:rgba(255,0,255,0.06);--border:#3a0066;--border-soft:#220040;--text:#f0e0ff;--text-muted:#8844bb;--text-soft:#cc77ff;--accent:#ff00ff;--accent-2:#39ff14;--accent-3:#ff003c;--accent-4:#00ffff;--glow:rgba(255,0,255,0.2);--glow-strong:rgba(255,0,255,0.5);--grid-color:rgba(255,0,255,0.04);--font-main:'Rajdhani','Share Tech Mono',sans-serif;--font-title:'Orbitron',monospace;--radius:10px;--radius-sm:6px;--scanline-opacity:1;--grid-opacity:1;--card-glow:0 0 40px rgba(255,0,255,0.15),0 0 80px rgba(0,255,255,0.05);--neon-text-shadow:0 0 20px;--bar-glow:0 0 12px;--dropdown-shadow:0 8px 30px rgba(255,0,255,0.3),0 0 40px rgba(0,255,255,0.1);color-scheme:dark}
-
-/* ───────── Base ───────── */
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg-body);font-family:var(--font-main);color:var(--text);min-height:100vh;display:flex;flex-direction:column;transition:background .4s,color .4s;
-  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
-body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);pointer-events:none;z-index:999;opacity:var(--scanline-opacity)}
-[data-theme="gaming"] body::before{background:repeating-linear-gradient(0deg,transparent,transparent 1px,rgba(255,0,255,0.015) 1px,rgba(255,0,255,0.015) 3px)}
-.grid-bg{position:fixed;inset:0;background-image:linear-gradient(var(--grid-color) 1px,transparent 1px),linear-gradient(90deg,var(--grid-color) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;opacity:var(--grid-opacity);z-index:0}
-[data-theme="paper"] .grid-bg{background-image:linear-gradient(var(--grid-color) 1px,transparent 1px);background-size:100% 32px}
-[data-theme="gaming"] .grid-bg{background-size:50px 50px}
-button,input,textarea{font-family:inherit;color:inherit}
+:root{--bg:#0e1319;--card:#171f29;--line:#263241;--tx:#e8eef5;--mut:#8696ab;--acc:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--r:14px}
+@media(prefers-color-scheme:light){:root{--bg:#f3f5f9;--card:#fff;--line:#e1e7ef;--tx:#0f172a;--mut:#64748b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+button,input{font:inherit;color:inherit}
+button{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 14px;cursor:pointer}
+button:active{transform:scale(.98)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+button.danger{color:var(--bad)}
+input[type=text],input[type=password],input[type=number],input[type=search]{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 12px;outline:none}
+input:focus{border-color:var(--acc)}
+.wrap{max-width:1000px;margin:0 auto;padding:16px}
 .hidden{display:none!important}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-::-webkit-scrollbar{width:4px;height:4px}
-::-webkit-scrollbar-track{background:var(--bg-body)}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-svg.i{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none;display:block}
-
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-@keyframes rgbText{0%{background-position:0% center}100%{background-position:200% center}}
-@keyframes rgbPulse{0%,100%{box-shadow:0 0 15px rgba(255,0,255,0.6)}33%{box-shadow:0 0 15px rgba(0,255,255,0.6)}66%{box-shadow:0 0 15px rgba(57,255,20,0.6)}}
-@keyframes heartbeat{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}
-
-/* ───────── Acceso ───────── */
-.login-wrap{display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 70px);flex:1;position:relative;z-index:1;padding:20px}
-.login-box{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:48px 40px;width:100%;max-width:400px;text-align:center;box-shadow:var(--card-glow);position:relative;overflow:hidden}
-.login-box::before{content:'';position:absolute;top:0;left:0;width:100%;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent)}
-.login-logo{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:24px}
-.login-logo-icon{width:48px;height:48px;background:linear-gradient(135deg,var(--accent),var(--text-soft));border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 0 25px var(--glow-strong)}
-[data-theme="gaming"] .login-logo-icon{background:linear-gradient(135deg,#ff00ff,#00ffff);box-shadow:0 0 25px rgba(255,0,255,0.6);animation:rgbPulse 2s ease-in-out infinite}
-.login-title{font-family:var(--font-title);font-size:28px;font-weight:900;letter-spacing:3px;background:linear-gradient(90deg,var(--accent),var(--text-soft));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
-[data-theme="gaming"] .login-title{background:linear-gradient(90deg,#ff00ff,#00ffff,#39ff14);background-size:200% auto;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:rgbText 3s linear infinite}
-.login-title span{-webkit-text-fill-color:var(--accent-2)}
-[data-theme="gaming"] .login-title span{-webkit-text-fill-color:#39ff14}
-.login-sub{color:var(--text-muted);font-size:11px;letter-spacing:2px;margin-bottom:32px}
-[data-theme="paper"] .login-sub{font-style:italic;font-size:13px;letter-spacing:0}
-.login-input{width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:14px 16px;color:var(--text);font-family:monospace;font-size:14px;outline:none;margin-bottom:16px;transition:border-color .2s}
-.login-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--glow)}
-.login-btn{width:100%;background:transparent;border:1px solid var(--accent-2);color:var(--accent-2);border-radius:8px;padding:14px;cursor:pointer;font-family:var(--font-main);font-size:13px;letter-spacing:1px;transition:all .2s;font-weight:700}
-.login-btn:hover{background:var(--accent-2);color:var(--bg-body);box-shadow:0 0 20px var(--glow-strong)}
-[data-theme="gaming"] .login-btn{border-color:#39ff14;color:#39ff14}
-[data-theme="gaming"] .login-btn:hover{background:#39ff14;color:#08000f;box-shadow:0 0 20px rgba(57,255,20,0.4)}
-.login-err{color:var(--accent-3);font-size:12px;margin-top:12px;padding:10px;background:color-mix(in srgb,var(--accent-3) 10%,transparent);border:1px solid color-mix(in srgb,var(--accent-3) 30%,transparent);border-radius:8px}
-.login-hint{color:var(--text-muted);font-size:10px;margin-top:20px;letter-spacing:.5px;opacity:.7}
-
-/* ───────── Encabezado ───────── */
-.wrap{max-width:1200px;margin:0 auto;padding:0 20px;width:100%;flex:1;position:relative;z-index:1}
-.header{padding:28px 0 20px;display:grid;grid-template-columns:1fr auto;align-items:center;border-bottom:1px solid var(--border-soft);gap:12px}
-.logo{display:flex;align-items:center;gap:12px}
-.logo-icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--text-soft));border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 0 20px var(--glow-strong)}
-[data-theme="paper"] .logo-icon{background:var(--bg-card-alt);border:2px solid var(--accent);box-shadow:none}
-[data-theme="gaming"] .logo-icon{background:linear-gradient(135deg,#ff00ff,#00ffff);box-shadow:0 0 20px rgba(255,0,255,0.6);animation:rgbPulse 2s ease-in-out infinite}
-.logo-text{font-family:var(--font-title);font-size:20px;font-weight:900;letter-spacing:3px;background:linear-gradient(90deg,var(--accent),var(--text-soft));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-[data-theme="paper"] .logo-text{font-size:28px;letter-spacing:1px;font-weight:700}
-[data-theme="gaming"] .logo-text{background:linear-gradient(90deg,#ff00ff,#00ffff,#39ff14);background-size:200% auto;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:rgbText 3s linear infinite}
-.logo-text span{-webkit-text-fill-color:var(--accent-2)}
-[data-theme="gaming"] .logo-text span{-webkit-text-fill-color:#39ff14}
-.logo-sub{color:var(--text-muted);font-size:10px;margin-top:3px;letter-spacing:2px}
-[data-theme="paper"] .logo-sub{font-style:italic;font-size:12px;letter-spacing:0}
-[data-theme="gaming"] .logo-sub{letter-spacing:4px;color:#8844bb}
-.header-right{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-
-/* ───────── Botones (sobrios) ───────── */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-family:var(--font-main);font-size:13px;cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s,color .15s,filter .15s}
-.btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
-.btn:disabled{opacity:.5;cursor:default}
-.btn.pri{background:var(--accent-2);border-color:var(--accent-2);color:var(--bg-body);font-weight:700}
-.btn.pri:hover:not(:disabled){filter:brightness(1.1);color:var(--bg-body)}
-.btn.warn{color:var(--accent-3)}
-.btn.warn:hover:not(:disabled){border-color:var(--accent-3);color:var(--accent-3)}
-.btn svg.i{width:18px;height:18px}
-.ibtn{width:40px;padding:0;border-color:transparent;background:transparent;color:var(--text-muted)}
-.ibtn:hover:not(:disabled){background:var(--bg-hover);color:var(--text);border-color:transparent}
-.ibtn.warn:hover:not(:disabled){background:color-mix(in srgb,var(--accent-3) 12%,transparent);color:var(--accent-3)}
-.pill{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 14px;border-radius:99px;border:1px solid var(--border);background:var(--bg-card);font-size:12px;letter-spacing:.5px;white-space:nowrap}
-.pill .pd{width:8px;height:8px;border-radius:50%;background:var(--text-muted)}
-.pill.online .pd{background:var(--accent-2);box-shadow:0 0 8px var(--accent-2)}
-.pill.offline .pd{background:var(--accent-3);box-shadow:0 0 8px var(--accent-3)}
-.login-switch{position:fixed;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:5}
-.login-switch .btn{background:var(--bg-card);border-color:var(--border);color:var(--text-soft)}
-.search{position:relative;flex:1;min-width:190px}
-.search svg.i{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none}
-.search .search-input{width:100%;min-height:40px;padding:0 14px 0 40px;border-radius:var(--radius-sm)}
-.foot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:20px}
-/* Selector de temas (ventana) */
-.themes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
-.tcard{display:flex;flex-direction:column;gap:3px;text-align:left;padding:13px;border:1.5px solid var(--border);background:var(--bg-card-alt);border-radius:var(--radius-sm);cursor:pointer;color:var(--text);font-family:var(--font-main);transition:border-color .15s}
-.tcard:hover{border-color:var(--text-muted)}
-.tcard b{font-size:13px;letter-spacing:1px}.tcard small{font-size:11px;color:var(--text-muted)}
-.tcard[aria-checked=true]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 14px var(--glow)}
-.sw{display:flex;margin-bottom:9px}
-.sw i{width:22px;height:22px;border-radius:50%;border:2px solid var(--bg-card-alt);margin-right:-6px}
-.sw i:nth-child(1){background:var(--a)}.sw i:nth-child(2){background:var(--b)}.sw i:nth-child(3){background:var(--c)}
-
-/* ───────── Resumen (también filtra) ───────── */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:24px 0}
-.stat-card{background:linear-gradient(135deg,var(--bg-card),var(--bg-card-alt));border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;position:relative;overflow:hidden;transition:all .4s;box-shadow:var(--card-glow);text-align:left;cursor:pointer;color:var(--text);font-family:var(--font-main)}
-.stat-card::before{content:'';position:absolute;top:0;left:0;width:100%;height:2px}
-.stat-card[data-k=all]::before{background:linear-gradient(90deg,transparent,var(--accent),transparent)}
-.stat-card[data-k=active]::before{background:linear-gradient(90deg,transparent,var(--accent-2),transparent)}
-.stat-card[data-k=soon]::before{background:linear-gradient(90deg,transparent,var(--accent-4),transparent)}
-.stat-card[data-k=expired]::before{background:linear-gradient(90deg,transparent,var(--accent-3),transparent)}
-.stat-card:hover{border-color:var(--accent)}
-.stat-card[aria-pressed=true]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),var(--card-glow)}
-.stat-label{color:var(--text-muted);font-size:10px;letter-spacing:2px;margin-bottom:6px}
-[data-theme="paper"] .stat-label{font-size:12px;letter-spacing:0;font-style:italic}
-.stat-value{font-family:var(--font-title);font-weight:700;font-size:30px}
-.stat-card[data-k=all] .stat-value{color:var(--accent);text-shadow:var(--neon-text-shadow) var(--accent)}
-.stat-card[data-k=active] .stat-value{color:var(--accent-2);text-shadow:var(--neon-text-shadow) var(--accent-2)}
-.stat-card[data-k=soon] .stat-value{color:var(--accent-4);text-shadow:var(--neon-text-shadow) var(--accent-4)}
-.stat-card[data-k=expired] .stat-value{color:var(--accent-3);text-shadow:var(--neon-text-shadow) var(--accent-3)}
-[data-theme="light"] .stat-value,[data-theme="paper"] .stat-value{text-shadow:none}
-.stat-sub{font-size:10px;color:var(--text-muted);margin-top:4px;letter-spacing:.5px}
-
-/* ───────── Herramientas ───────── */
-.toolbar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
-.search-input{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:var(--font-main);font-size:13px;outline:none;flex:1;min-width:180px;transition:border-color .2s,background .4s}
-.search-input:focus{border-color:var(--accent)}
-
-/* ───────── Lista de cuentas ───────── */
-.table-wrap{margin-bottom:40px}
-#list{display:flex;flex-direction:column;gap:12px}
-.lhead,.lrow{display:grid;grid-template-columns:minmax(150px,1.2fr) minmax(200px,2.2fr) 110px 90px 112px;grid-template-areas:"name uuid exp days acts";gap:12px;align-items:center;padding:13px 16px}
-.lhead{color:var(--text-muted);font-size:10px;letter-spacing:2px;padding-top:0;padding-bottom:10px}
-[data-theme="paper"] .lhead{font-size:12px;letter-spacing:0;font-style:italic}
-.lrow{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--card-glow);transition:border-color .2s,background .2s}
-.lrow:hover{background:var(--bg-hover);border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
-.c-name{grid-area:name;min-width:0}.c-uuid{grid-area:uuid;min-width:0}.c-exp{grid-area:exp}.c-days{grid-area:days}.c-acts{grid-area:acts}
-.nm{display:block;font-size:14px;font-weight:700;letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:5px}
-.badge{display:inline-flex;align-items:center;gap:5px;border-radius:20px;padding:3px 10px;font-size:10px;letter-spacing:1px}
-.badge-active{background:color-mix(in srgb,var(--accent-2) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent-2) 35%,transparent);color:var(--accent-2)}
-.badge-soon{background:color-mix(in srgb,var(--accent-4) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent-4) 35%,transparent);color:var(--accent-4)}
-.badge-expired{background:color-mix(in srgb,var(--accent-3) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent-3) 35%,transparent);color:var(--accent-3)}
-.badge-sr{background:color-mix(in srgb,var(--text-muted) 10%,transparent);border:1px solid color-mix(in srgb,var(--text-muted) 25%,transparent);color:var(--text-muted)}
-.dot{width:5px;height:5px;border-radius:50%;display:inline-block;background:currentColor}
-.badge-active .dot{box-shadow:0 0 5px var(--accent-2);animation:pulse 2s infinite}
-.uuid-btn{display:flex;align-items:center;gap:8px;width:100%;min-width:0;background:var(--bg-input);border:1px solid transparent;border-radius:6px;padding:7px 10px;cursor:pointer;color:var(--text-soft);text-align:left;transition:all .2s}
-.uuid-btn:hover{border-color:var(--accent);color:var(--accent)}
-.uuid-btn code{flex:1;min-width:0;font-family:'Share Tech Mono',ui-monospace,Menlo,Consolas,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.c-exp{font-size:12px}
-.c-exp .lbl{display:none;color:var(--text-muted);margin-right:6px}
-.expiry-ok{color:var(--accent-2)}.expiry-warn{color:var(--accent-4)}.expiry-bad{color:var(--accent-3)}.expiry-na{color:var(--text-muted)}
-.c-days b{font-family:var(--font-title);font-size:18px;font-weight:700}
-.c-days small{margin-left:4px;font-size:10px;color:var(--text-muted);letter-spacing:.5px}
-.c-acts{display:flex;gap:2px;justify-content:flex-end}.c-acts .btn{width:36px;min-height:36px}
-.empty-state{text-align:center;padding:60px 20px;color:var(--text-muted);background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--card-glow)}
-.empty-state .icon{font-size:48px;margin-bottom:14px;opacity:.5}
-.empty-state h3{font-family:var(--font-title);font-size:18px;color:var(--text);margin-bottom:8px;letter-spacing:2px}
-[data-theme="paper"] .empty-state h3{font-size:26px;letter-spacing:0}
-.empty-state p{margin-bottom:20px;font-size:13px}
-
-/* ───────── Diálogos ───────── */
-dialog.modal{background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:28px;width:90%;max-width:500px;box-shadow:var(--card-glow);font-family:var(--font-main);margin:auto;max-height:90vh;overflow-y:auto}
-dialog.modal[open]{animation:fadeIn .2s ease}
-dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
-[data-theme="light"] dialog.modal::backdrop{background:rgba(20,30,50,0.5)}
-[data-theme="paper"] dialog.modal::backdrop{background:rgba(60,50,30,0.5)}
-[data-theme="gaming"] dialog.modal::backdrop{background:rgba(10,0,20,0.9);backdrop-filter:blur(10px)}
-.modal-title{color:var(--accent);font-family:var(--font-title);font-size:14px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;letter-spacing:2px}
-[data-theme="paper"] .modal-title{font-size:22px;letter-spacing:0}
-.close-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px}
-.close-btn:hover{color:var(--text)}
-.sub{color:var(--text-muted);font-size:12px;margin:-8px 0 16px;line-height:1.6}
-.field{margin-bottom:14px}
-.field label{display:block;color:var(--text-soft);font-size:10px;letter-spacing:1px;margin-bottom:5px}
-[data-theme="paper"] .field label{font-size:12px;letter-spacing:0;font-style:italic}
-.field input[type=text],.field input[type=number]{width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-family:var(--font-main);font-size:13px;outline:none;transition:border-color .2s,background .4s}
-.field input:focus{border-color:var(--accent)}
-.field .hint{font-size:10px;color:var(--text-muted);margin-top:4px;letter-spacing:.3px}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-.chip-btn{background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:8px;padding:6px 12px;cursor:pointer;font-family:var(--font-main);font-size:11px;letter-spacing:1px;transition:all .2s}
-.chip-btn:hover{border-color:var(--accent);color:var(--accent)}
-.chip-btn.sel{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);color:var(--accent)}
-.form-err{color:var(--accent-3);font-size:12px;margin-bottom:12px;padding:10px;background:color-mix(in srgb,var(--accent-3) 10%,transparent);border:1px solid color-mix(in srgb,var(--accent-3) 30%,transparent);border-radius:8px}
-.kv{color:var(--text-muted);font-size:10px;letter-spacing:1px;margin-top:12px}
-.kv-v{font-size:14px;margin-top:3px}
-.res{word-break:break-all;font:12px/1.5 'Share Tech Mono',ui-monospace,Menlo,monospace;background:var(--bg-input);border:1px solid var(--border-soft);border-radius:7px;padding:10px 12px;margin-top:4px;color:var(--accent)}
-.chk{display:flex;align-items:center;gap:10px;margin:6px 0 14px;font-size:12px;cursor:pointer}
-.chk input{width:16px;height:16px;accent-color:var(--accent)}
-.row2{display:flex;gap:8px}.row2 input{flex:1;min-width:0}.row2 .btn{flex:none}
-.tok-t{margin-top:14px}
-
-/* ───────── Aviso y pie ───────── */
-.toast{position:fixed;bottom:28px;right:28px;border-radius:10px;padding:12px 20px;font-size:12px;font-family:var(--font-main);z-index:2000;display:none;animation:fadeIn .3s ease;max-width:400px;background:var(--bg-card)}
-.toast.show{display:block}
-.toast-ok{border:1px solid var(--accent-2);color:var(--accent-2);box-shadow:0 0 20px color-mix(in srgb,var(--accent-2) 25%,transparent)}
-.toast-err{border:1px solid var(--accent-3);color:var(--accent-3);box-shadow:0 0 20px color-mix(in srgb,var(--accent-3) 25%,transparent)}
-[data-theme="light"] .toast-ok,[data-theme="light"] .toast-err,[data-theme="paper"] .toast-ok,[data-theme="paper"] .toast-err{box-shadow:0 4px 20px rgba(0,0,0,0.15)}
-.footer{background:var(--bg-card);border-top:1px solid var(--border);padding:18px 20px;text-align:center;color:var(--text-muted);font-size:11px;letter-spacing:1px;margin-top:40px;position:relative;z-index:1}
-.footer .heart{color:var(--accent-3);display:inline-block;animation:heartbeat 1.5s ease-in-out infinite}
-.footer .year{color:var(--text-soft);font-weight:700}
-.footer .version{margin-top:4px;font-size:10px;opacity:.7}
-
-/* ───────── Móvil ───────── */
-@media(max-width:720px){
-  .stats{grid-template-columns:1fr 1fr}
-  .header{grid-template-columns:1fr;padding:18px 0 14px}
-  .header-right{width:100%;justify-content:flex-start}
-  .lhead{display:none}
-  .lrow{grid-template-columns:1fr auto;grid-template-areas:"name days" "uuid uuid" "exp acts";row-gap:10px;padding:14px 14px}
-  .c-days{text-align:right}
-  .c-exp .lbl{display:inline}
-  .c-acts .btn{width:42px;min-height:42px}
-  .toolbar .lbl-sm span{display:none}
-  .toolbar .lbl-sm{width:42px;padding:0}
-  .login-box{padding:36px 24px}
-  .toast{left:16px;right:16px;bottom:18px;max-width:none}
-}
-@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-.svc{margin-top:18px;padding-top:16px;border-top:1px solid var(--border-soft)}
-.svc label{margin-bottom:8px}
-.svc-st{display:block;font-size:12px;margin-bottom:10px}
-.svc-btns{display:flex;gap:8px}.svc-btns .btn{flex:1}
-.btn.danger{color:var(--accent-3);border-color:color-mix(in srgb,var(--accent-3) 40%,transparent)}
-.btn.danger:hover:not(:disabled){background:color-mix(in srgb,var(--accent-3) 14%,transparent);border-color:var(--accent-3);color:var(--accent-3)}
-.btn.start{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent-2) 40%,transparent)}
-.btn.start:hover:not(:disabled){background:color-mix(in srgb,var(--accent-2) 14%,transparent);border-color:var(--accent-2);color:var(--accent-2)}
-.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px}
-.seg .chip-btn{padding:9px 12px;font-size:12px}
-.preview{margin:4px 0 14px;padding:10px 12px;border:1px dashed var(--border);border-radius:var(--radius-sm);font-size:12px;line-height:1.6;color:var(--text-soft)}
-.preview b{color:var(--accent)}
-.sys{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0 0;padding:14px 18px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--card-glow)}
-.gauge{min-width:0}
-.g-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
-.g-lbl{color:var(--text-muted);font-size:10px;letter-spacing:2px}
-[data-theme="paper"] .g-lbl{font-size:12px;letter-spacing:0;font-style:italic}
-.g-val{font-family:var(--font-title);font-weight:700;font-size:17px;font-variant-numeric:tabular-nums}
-.g-bar{height:6px;border-radius:99px;background:var(--bg-input);border:1px solid var(--border-soft);overflow:hidden}
-.g-bar i{display:block;height:100%;width:0;border-radius:99px;background:var(--accent-2);box-shadow:var(--bar-glow) var(--accent-2);transition:width .6s ease,background .3s}
-.g-det{margin-top:7px;font-size:10px;color:var(--text-muted);letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gauge.warn .g-val{color:var(--accent-4)}.gauge.warn .g-bar i{background:var(--accent-4);box-shadow:var(--bar-glow) var(--accent-4)}
-.gauge.bad .g-val{color:var(--accent-3)}.gauge.bad .g-bar i{background:var(--accent-3);box-shadow:var(--bar-glow) var(--accent-3)}
-.sys-foot{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px 24px;padding-top:12px;border-top:1px solid var(--border-soft)}
-.sf{display:inline-flex;align-items:baseline;gap:7px;white-space:nowrap;font-size:11px;color:var(--text-muted)}
-.sf-l{font-style:normal;font-size:10px;letter-spacing:1.5px}
-.sf.rx .sf-l{color:var(--accent)}.sf.tx .sf-l{color:var(--accent-2)}
-[data-theme="paper"] .sf-l{letter-spacing:0;font-style:italic;font-size:12px}
-.sf b{font-family:var(--font-title);font-size:13px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
-.sf em{font-style:normal}
-@media(max-width:720px){.sys-foot{gap:6px 16px;padding-top:10px}.sys{gap:10px;padding:12px 12px;margin-top:16px}.g-val{font-size:15px}.g-lbl{letter-spacing:1px}}
-@media(max-width:380px){.g-det{display:none}}
+header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+header h1{font-size:18px;margin:0;flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:99px;border:1px solid var(--line);background:var(--card);font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--mut)}
+.dot.on{background:var(--ok)}.dot.off{background:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
+.stat b{display:block;font-size:22px}.stat span{color:var(--mut);font-size:12px}
+.bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.bar input{flex:1;min-width:160px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;border-left:4px solid var(--ok)}
+.card.soon{border-left-color:var(--warn)}.card.expired{border-left-color:var(--bad)}.card.sr{border-left-color:var(--mut)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.row b{font-size:16px;word-break:break-all}
+.badge{font-size:12px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap;background:#22c55e22;color:var(--ok)}
+.soon .badge{background:#f59e0b22;color:var(--warn)}.expired .badge{background:#ef444422;color:var(--bad)}.sr .badge{background:#8696ab22;color:var(--mut)}
+.uuid{display:block;width:100%;text-align:left;margin:10px 0 6px;font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:8px 10px}
+.mut{color:var(--mut);font-size:13px}
+.acts{display:flex;gap:6px;margin-top:12px}.acts button{flex:1;padding:8px 6px;font-size:13px}
+.empty{text-align:center;color:var(--mut);padding:40px 10px}
+dialog{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:18px;padding:20px;width:min(420px,92vw)}
+dialog::backdrop{background:#0009}
+dialog h2{margin:0 0 14px;font-size:17px}
+label{display:block;margin:12px 0 5px;color:var(--mut);font-size:13px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chips button{padding:6px 11px;font-size:13px}
+.chips button.sel{border-color:var(--acc);color:var(--acc)}
+.foot{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+.chk{display:flex;align-items:center;gap:10px;margin-top:14px;color:var(--tx);font-size:14px}
+.chk input{width:18px;height:18px}
+.login{max-width:340px;margin:18vh auto 0}
+.login .card{padding:22px}.login h1{margin:0 0 4px}
+.err{color:var(--bad);font-size:13px;min-height:18px;margin-top:8px}
+.res{word-break:break-all;font:12px ui-monospace,Menlo,monospace;background:var(--bg);padding:10px;border-radius:10px;margin:6px 0}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111c;color:#fff;padding:10px 16px;border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;backdrop-filter:blur(6px);max-width:90vw;z-index:99}
+#toast.show{opacity:1}
+@media(max-width:480px){.stats{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body>
-<div class="grid-bg"></div>
 
-<!-- ───────── Acceso ───────── -->
-<div id="loginView" class="login-wrap hidden">
-  <div class="login-switch"><button class="btn ibtn" data-open="dTheme" aria-label="Cambiar apariencia" title="Apariencia"><i data-ic="theme"></i></button></div>
-  <div class="login-box">
-    <div class="login-logo"><div class="login-logo-icon">🔐</div></div>
-    <div class="login-title">PANEL <span>V2RAY</span></div>
-    <div class="login-sub">ADMINISTRADOR DE CUENTAS UUID</div>
-    <input class="login-input" type="password" id="pw" placeholder="Contraseña" autocomplete="current-password" aria-label="Contraseña">
-    <button class="login-btn" id="loginBtn">ENTRAR</button>
-    <div class="login-err hidden" id="loginErr" role="alert"></div>
-    <div class="login-hint">Acceso restringido al administrador</div>
+<div id="loginView" class="wrap login hidden">
+  <div class="card">
+    <h1>V2Panel</h1><div class="mut" style="margin-bottom:16px">Administrador de cuentas UUID</div>
+    <input type="password" id="pw" placeholder="Contraseña" autocomplete="current-password">
+    <div class="err" id="loginErr"></div>
+    <button class="pri" id="loginBtn" style="width:100%;margin-top:6px">Entrar</button>
   </div>
 </div>
 
-<!-- ───────── Panel ───────── -->
 <div id="appView" class="wrap hidden">
-  <div class="header">
-    <div class="logo">
-      <div class="logo-icon">🛰️</div>
-      <div><div class="logo-text">Panel<span>V2Ray</span></div><div class="logo-sub">MANAGER · UUID</div></div>
-    </div>
-    <div class="header-right">
-      <span class="pill offline" id="statusPill"><i class="pd"></i><span id="statusTxt">…</span></span>
-      <button class="btn ibtn" data-open="dTheme" aria-label="Cambiar apariencia" title="Apariencia"><i data-ic="theme"></i></button>
-      <button class="btn ibtn" id="gear" aria-label="Ajustes" title="Ajustes"><i data-ic="sliders"></i></button>
-      <button class="btn ibtn" id="logout" aria-label="Cerrar sesión" title="Cerrar sesión"><i data-ic="logout"></i></button>
-    </div>
+  <header>
+    <h1>V2Panel</h1>
+    <span class="pill" id="statusPill"><i class="dot" id="dot"></i><span id="statusTxt">…</span></span>
+    <button id="gear" title="Ajustes">⚙</button>
+    <button id="logout" title="Salir">⎋</button>
+  </header>
+  <div class="stats">
+    <div class="stat"><b id="sTotal">0</b><span>Total</span></div>
+    <div class="stat"><b id="sOk" style="color:var(--ok)">0</b><span>Activos</span></div>
+    <div class="stat"><b id="sSoon" style="color:var(--warn)">0</b><span>Por vencer (≤3d)</span></div>
+    <div class="stat"><b id="sExp" style="color:var(--bad)">0</b><span>Vencidos</span></div>
   </div>
-
-  <section class="sys" aria-label="Uso del servidor">
-    <div class="gauge" id="gCpu"><div class="g-top"><span class="g-lbl">CPU</span><span class="g-val" id="gCpuV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de CPU" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gCpuD">&nbsp;</div></div>
-    <div class="gauge" id="gMem"><div class="g-top"><span class="g-lbl">RAM</span><span class="g-val" id="gMemV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de memoria RAM" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gMemD">&nbsp;</div></div>
-    <div class="gauge" id="gDisk"><div class="g-top"><span class="g-lbl">DISCO</span><span class="g-val" id="gDiskV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de disco" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gDiskD">&nbsp;</div></div>
-    <div class="sys-foot">
-      <span class="sf" title="Tiempo desde el último arranque del servidor"><i class="sf-l">ENCENDIDO</i><b id="sUp">–</b></span>
-      <span class="sf rx" title="Tráfico recibido: velocidad actual y total desde el arranque"><i class="sf-l">↓ RECIBIDO</i><b id="sRx">–</b><em id="sRxT"></em></span>
-      <span class="sf tx" title="Tráfico enviado: velocidad actual y total desde el arranque"><i class="sf-l">↑ ENVIADO</i><b id="sTx">–</b><em id="sTxT"></em></span>
-    </div>
-  </section>
-
-  <div class="stats" aria-label="Resumen y filtros">
-    <button class="stat-card" data-k="all" aria-pressed="true"><div class="stat-label">CUENTAS</div><div class="stat-value" id="sTotal">0</div></button>
-    <button class="stat-card" data-k="active" aria-pressed="false"><div class="stat-label">ACTIVAS</div><div class="stat-value" id="sOk">0</div></button>
-    <button class="stat-card" data-k="soon" aria-pressed="false"><div class="stat-label">POR VENCER</div><div class="stat-value" id="sSoon">0</div></button>
-    <button class="stat-card" data-k="expired" aria-pressed="false"><div class="stat-label">VENCIDAS</div><div class="stat-value" id="sExp">0</div></button>
+  <div class="bar">
+    <input type="search" id="q" placeholder="Buscar usuario o UUID…">
+    <button class="pri" id="newBtn">+ Nuevo</button>
+    <button id="cleanBtn">Limpiar vencidos</button>
+    <button id="restartBtn">Reiniciar V2Ray</button>
   </div>
-
-  <div class="toolbar">
-    <label class="search"><i data-ic="search"></i><input class="search-input" type="search" id="q" placeholder="Buscar por usuario o UUID" aria-label="Buscar"></label>
-    <button class="btn pri" id="newBtn"><i data-ic="plus"></i><span>Nuevo usuario</span></button>
-    <button class="btn lbl-sm" id="cleanBtn" title="Eliminar cuentas vencidas"><i data-ic="clock"></i><span>Limpiar vencidas</span></button>
-  </div>
-
-  <div class="table-wrap" aria-label="Cuentas">
-    <div class="lhead" id="thead"><div style="grid-area:name">USUARIO</div><div style="grid-area:uuid">UUID</div><div style="grid-area:exp">VENCE</div><div style="grid-area:days">RESTAN</div></div>
-    <div id="list"></div>
-  </div>
+  <div class="grid" id="list"></div>
 </div>
 
-<footer class="footer"><div>© <span class="year" id="yr"></span> • Panel V2Ray • <span class="heart">v1.0</span></div><div class="version">Todos los derechos reservados</div></footer>
-
-<!-- ───────── Diálogos ───────── -->
-<dialog class="modal" id="dNew">
-  <div class="modal-title"><span>👤 NUEVO USUARIO V2RAY</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="sub">Se genera un UUID y se agrega a V2Ray al instante.</div>
-  <div class="field"><label for="nNick">USUARIO</label><input type="text" id="nNick" maxlength="32" placeholder="ej: cliente01" autocomplete="off" autocapitalize="none" spellcheck="false"><div class="hint">2 a 32 caracteres: letras, números, punto, guion o guion bajo</div></div>
-  <div class="field"><label for="nDays">DÍAS</label><input type="number" id="nDays" min="1" value="30" inputmode="numeric">
-    <div class="chips" data-for="nDays"><button class="chip-btn">7</button><button class="chip-btn">15</button><button class="chip-btn sel">30</button><button class="chip-btn">60</button><button class="chip-btn">90</button></div></div>
-  <div class="form-err hidden" id="nErr" role="alert"></div>
-  <div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="nOk">Crear usuario</button></div>
+<dialog id="dNew">
+  <h2>Nuevo usuario UUID</h2>
+  <label>Usuario</label><input type="text" id="nNick" maxlength="20" placeholder="ej. juan01" autocomplete="off">
+  <label>Duración (días)</label><input type="number" id="nDays" min="1" value="30" inputmode="numeric">
+  <div class="chips" data-for="nDays"><button>7</button><button>15</button><button>30</button><button>60</button><button>90</button></div>
+  <div class="err" id="nErr"></div>
+  <div class="foot"><button data-close>Cancelar</button><button class="pri" id="nOk">Crear</button></div>
 </dialog>
 
-<dialog class="modal" id="dRenew">
-  <div class="modal-title"><span>✎ EDITAR DÍAS: <span id="rNick"></span></span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="sub" id="rInfo"></div>
-  <div class="seg" role="radiogroup" aria-label="Modo">
-    <button class="chip-btn sel" data-mode="set" role="radio" aria-checked="true">Fijar días</button>
-    <button class="chip-btn" data-mode="add" role="radio" aria-checked="false">Sumar días</button>
-  </div>
-  <div class="field"><label for="rDays" id="rLabel">NUEVA DURACIÓN (DÍAS DESDE HOY)</label><input type="number" id="rDays" min="1" value="30" inputmode="numeric">
-    <div class="chips" data-for="rDays"><button class="chip-btn">7</button><button class="chip-btn">15</button><button class="chip-btn sel">30</button><button class="chip-btn">60</button><button class="chip-btn">90</button></div></div>
-  <div class="preview" id="rPrev"></div>
-  <div class="form-err hidden" id="rErr" role="alert"></div>
-  <div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="rOk">Guardar cambios</button></div>
+<dialog id="dRenew">
+  <h2>Renovar <span id="rNick"></span></h2>
+  <div class="mut" id="rInfo"></div>
+  <label>Sumar días</label><input type="number" id="rDays" min="1" value="30" inputmode="numeric">
+  <div class="chips" data-for="rDays"><button>7</button><button>15</button><button>30</button><button>60</button><button>90</button></div>
+  <div class="err" id="rErr"></div>
+  <div class="foot"><button data-close>Cancelar</button><button class="pri" id="rOk">Renovar</button></div>
 </dialog>
 
-<dialog class="modal" id="dDone">
-  <div class="modal-title"><span style="color:var(--accent-2)">✓ CUENTA CREADA</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="kv">USUARIO</div><div class="kv-v" id="dNick"></div>
-  <div class="kv">UUID</div><div class="res" id="dUuid"></div>
-  <div class="kv">EXPIRA</div><div class="kv-v" id="dExp" style="margin-bottom:18px"></div>
-  <div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn" id="dCopyUuid"><i data-ic="copy"></i>Copiar UUID</button><button class="btn pri" id="dCopyLink"><i data-ic="link"></i>Copiar enlace</button></div>
+<dialog id="dDone">
+  <h2>✅ Usuario creado</h2>
+  <div class="mut">Usuario</div><div id="dNick" style="font-weight:600"></div>
+  <div class="mut" style="margin-top:10px">UUID</div><div class="res" id="dUuid"></div>
+  <div class="mut">Expira</div><div id="dExp"></div>
+  <div class="foot"><button id="dCopyUuid">Copiar UUID</button><button class="pri" id="dCopyLink">Copiar enlace</button></div>
+  <div class="foot" style="margin-top:8px"><button data-close>Cerrar</button></div>
 </dialog>
 
-<dialog class="modal" id="dManual">
-  <div class="modal-title"><span>COPIA MANUAL</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="sub">Tu navegador bloqueó la copia automática porque el panel usa HTTP. Selecciona el texto y cópialo.</div>
-  <div class="field"><textarea id="mcText" readonly rows="5" style="width:100%;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:10px;font:12px/1.5 'Share Tech Mono',ui-monospace,Menlo,monospace"></textarea></div>
-  <div class="foot"><button class="btn pri" data-close>Listo</button></div>
+<dialog id="dManual">
+  <h2>Copiar manualmente</h2>
+  <div class="mut">Tu navegador bloqueó la copia automática (el panel usa HTTP). Selecciona el texto y cópialo.</div>
+  <textarea id="mcText" readonly rows="5" style="width:100%;margin-top:10px;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:10px;font:12px ui-monospace,Menlo,monospace"></textarea>
+  <div class="foot"><button class="pri" data-close>Listo</button></div>
 </dialog>
 
-<dialog class="modal" id="dSet">
-  <div class="modal-title"><span>⚙ AJUSTES</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="field"><label for="setHost">DOMINIO O IP DE LOS ENLACES VMESS://</label><input type="text" id="setHost" placeholder="Vacío: usa la dirección con que abres el panel"></div>
-  <div class="field"><label for="setUrl">CONEXIÓN CON TU PANEL MAESTRO · URL</label><input type="text" id="setUrl" readonly><div class="hint" id="setSec"></div></div>
-  <div class="field"><label for="setTok">TOKEN</label><div class="row2"><input type="text" id="setTok" readonly><button class="btn" id="setCopyTok"><i data-ic="copy"></i>Copiar</button></div></div>
-  <label class="chk"><input type="checkbox" id="setAuto"> Eliminar cuentas vencidas cada hora</label>
-  <div class="svc"><label>SERVICIO V2RAY</label>
-    <span class="svc-st" id="svcState"></span>
-    <div class="svc-btns"><button class="btn" id="svcRestart"><i data-ic="power"></i>Reiniciar</button><button class="btn" id="svcToggle"></button></div>
-    <div class="hint">Reiniciar o detener corta las conexiones activas.</div></div>
-  <div class="form-err hidden" id="setErr" role="alert"></div>
-  <div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="setOk">Guardar ajustes</button></div>
+<dialog id="dSet">
+  <h2>Ajustes</h2>
+  <label>Dominio o IP para los enlaces vmess://</label>
+  <input type="text" id="setHost" placeholder="vacío = el que uses para abrir el panel">
+  <label>Para tu panel maestro (URL y token)</label>
+  <input type="text" id="setUrl" readonly>
+  <div style="display:flex;gap:6px;margin-top:6px"><input type="text" id="setTok" readonly><button id="setCopyTok">Copiar</button></div>
+  <label class="chk"><input type="checkbox" id="setAuto"> Eliminar vencidos automáticamente (cada hora)</label>
+  <div class="err" id="setErr"></div>
+  <div class="foot"><button data-close>Cancelar</button><button class="pri" id="setOk">Guardar</button></div>
 </dialog>
 
-<dialog class="modal" id="dTheme">
-  <div class="modal-title"><span>🎨 APARIENCIA</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="sub">Elige el tema del panel. Se guarda en este dispositivo.</div>
-  <div class="themes" role="radiogroup" aria-label="Tema">
-    <button class="tcard" role="radio" data-t="dark" style="--a:#00c8ff;--b:#0d1321;--c:#e0f0ff"><span class="sw"><i></i><i></i><i></i></span><b>🌙 Oscuro</b><small>Neón azul</small></button>
-    <button class="tcard" role="radio" data-t="light" style="--a:#0077cc;--b:#ffffff;--c:#1a2332"><span class="sw"><i></i><i></i><i></i></span><b>☀️ Claro</b><small>Limpio y neutro</small></button>
-    <button class="tcard" role="radio" data-t="paper" style="--a:#8b5a2b;--b:#fbfaf5;--c:#3d3833"><span class="sw"><i></i><i></i><i></i></span><b>🎨 Papel</b><small>Tonos cálidos</small></button>
-    <button class="tcard" role="radio" data-t="gaming" style="--a:#ff00ff;--b:#110020;--c:#00ffff"><span class="sw"><i></i><i></i><i></i></span><b>🎮 Gaming</b><small>Neón y RGB</small></button>
-  </div>
-  <div class="foot"><button class="btn pri" data-close>Listo</button></div>
-</dialog>
-
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="toast"></div>
 
 <script>
 const $=s=>document.querySelector(s);
-let S={users:[],running:false,settings:{}},filter="all",curRenew=null,lastNew=null;
+let S={users:[],running:false,settings:{}},curRenew=null,lastNew=null;
 
-/* ── Iconos de trazo (heredan el color del tema) ── */
-const ICON={
-  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
-  link:'<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
-  renew:'<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/>',
-  trash:'<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
-  plus:'<path d="M12 5v14M5 12h14"/>',
-  edit:'<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
-  search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
-  sliders:'<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
-  logout:'<path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3M16 8l4 4-4 4M20 12H9"/>',
-  theme:'<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>',
-  power:'<path d="M12 3v8M6.3 6.3a8 8 0 1 0 11.4 0"/>',
-  stop:'<rect x="6" y="6" width="12" height="12" rx="2"/>',
-  play:'<path d="M8 5v14l11-7z"/>',
-  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
-};
-const ic=n=>'<svg class="i" viewBox="0 0 24 24" aria-hidden="true">'+ICON[n]+'</svg>';
-document.querySelectorAll("[data-ic]").forEach(e=>{e.outerHTML=ic(e.dataset.ic)});
-$("#yr").textContent=new Date().getFullYear();
-
-/* ── Temas (misma clave y valores que el Panel VPS) ── */
-const THEME_KEY="sshplus_theme",VALID_THEMES=["dark","light","paper","gaming"];
-const THEME_COLOR={dark:"#060b14",light:"#f0f4f8",paper:"#f4f1ea",gaming:"#08000f"};
-function applyTheme(t){
-  if(!VALID_THEMES.includes(t))t="dark";
-  document.documentElement.setAttribute("data-theme",t);
-  try{localStorage.setItem(THEME_KEY,t)}catch(e){}
-  $('meta[name=theme-color]').setAttribute("content",THEME_COLOR[t]);
-  document.querySelectorAll(".tcard").forEach(b=>b.setAttribute("aria-checked",b.dataset.t===t));
-}
-applyTheme(document.documentElement.getAttribute("data-theme"));
-document.querySelectorAll(".tcard").forEach(b=>b.addEventListener("click",()=>applyTheme(b.dataset.t)));
-document.querySelectorAll("[data-open]").forEach(b=>b.addEventListener("click",()=>$("#"+b.dataset.open).showModal()));
-
-/* ── Utilidades ── */
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-function toast(t,isErr){const e=$("#toast");e.textContent=t;e.className="toast show "+(isErr?"toast-err":"toast-ok");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),2600)}
-function setErr(sel,msg){const e=$(sel);e.textContent=msg||"";e.classList.toggle("hidden",!msg)}
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),2400)}
 
 async function api(path,method="GET",body){
   const r=await fetch(path,{method,credentials:"same-origin",headers:{"Content-Type":"application/json","X-Panel":"1"},body:body?JSON.stringify(body):undefined});
   let d={};try{d=await r.json()}catch(e){}
-  if(r.status===401&&path!=="/api/login"){showLogin();throw new Error("Tu sesión expiró. Vuelve a entrar.")}
+  if(r.status===401&&path!=="/api/login"){showLogin();throw new Error("Sesión expirada")}
   if(!r.ok)throw new Error(d.error||("Error "+r.status));
   return d;
 }
 
-/* ── Copiar (con respaldo para HTTP) ── */
 function legacyCopy(text){
   const host=document.querySelector("dialog[open]")||document.body;
   const t=document.createElement("textarea");
@@ -1471,204 +923,107 @@ async function copy(text,msg){
   manualCopy(text);
 }
 
-/* ── Vistas ── */
 function showLogin(){$("#appView").classList.add("hidden");$("#loginView").classList.remove("hidden");$("#pw").value="";$("#pw").focus()}
 function showApp(){$("#loginView").classList.add("hidden");$("#appView").classList.remove("hidden")}
-/* Uso del servidor (CPU, RAM y disco) */
-function fmtB(n){const g=n/1073741824;if(g>=1024)return (g/1024).toFixed(2)+" TB";return g>=1?g.toFixed(g>=10?0:1)+" GB":Math.round(n/1048576)+" MB"}
-function fmtRate(b){if(b>=1048576)return (b/1048576).toFixed(1)+" MB/s";if(b>=1024)return Math.round(b/1024)+" KB/s";return Math.round(b)+" B/s"}
-function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?d+"d "+h+"h":h?h+"h "+m+"m":m+"m"}
-function setGauge(id,pct,det){
-  const g=$("#"+id),lvl=pct>=90?"bad":pct>=70?"warn":"";
-  g.className="gauge"+(lvl?" "+lvl:"");
-  $("#"+id+"V").textContent=pct+"%";
-  const bar=g.querySelector(".g-bar");bar.setAttribute("aria-valuenow",pct);bar.firstElementChild.style.width=Math.min(pct,100)+"%";
-  $("#"+id+"D").textContent=det||"\u00a0";
-}
-function renderSys(x){
-  if(!x)return;
-  setGauge("gCpu",x.cpu.pct,x.cpu.cores+(x.cpu.cores===1?" núcleo":" núcleos"));
-  setGauge("gMem",x.mem.pct,x.mem.total?fmtB(x.mem.used)+" de "+fmtB(x.mem.total):"");
-  setGauge("gDisk",x.disk.pct,x.disk.total?fmtB(x.disk.used)+" de "+fmtB(x.disk.total):"");
-  $("#sUp").textContent=x.uptime_s!=null?fmtUp(x.uptime_s):(x.uptime||"–");
-  if(x.net){
-    $("#sRx").textContent=fmtRate(x.net.rx_rate);$("#sRxT").textContent="· "+fmtB(x.net.rx_total)+" total";
-    $("#sTx").textContent=fmtRate(x.net.tx_rate);$("#sTxT").textContent="· "+fmtB(x.net.tx_total)+" total";
-  }
-}
-async function load(){S=await api("/api/state");showApp();render();renderSys(S.system)}
-setInterval(async()=>{
-  if(document.hidden||$("#appView").classList.contains("hidden"))return;
-  try{renderSys(await api("/api/system"))}catch(e){}
-},5000);
 
-const LABEL={ok:"ACTIVA",soon:"POR VENCER",expired:"VENCIDA",sr:"SIN FECHA"};
-const BADGE={ok:"badge-active",soon:"badge-soon",expired:"badge-expired",sr:"badge-sr"};
-const EXPC={ok:"expiry-ok",soon:"expiry-warn",expired:"expiry-bad",sr:"expiry-na"};
-function rowHTML(x){
-  const d=x.days,dayTxt=d===null?"∞":(x.status==="expired"?"0":d);
-  const unit=d===null?"":(d===1?"DÍA":"DÍAS");
-  return '<div class="lrow" data-u="'+esc(x.uuid)+'">'+
-    '<div class="c-name"><span class="nm" title="'+esc(x.nick)+'">'+esc(x.nick)+'</span><span class="badge '+BADGE[x.status]+'"><i class="dot"></i>'+LABEL[x.status]+'</span></div>'+
-    '<div class="c-uuid"><button class="uuid-btn" data-a="uuid" title="Copiar UUID"><code>'+esc(x.uuid)+'</code>'+ic("copy")+'</button></div>'+
-    '<div class="c-exp '+EXPC[x.status]+'"><span class="lbl">Vence</span>'+esc(x.exp)+'</div>'+
-    '<div class="c-days '+EXPC[x.status]+'"><b>'+dayTxt+'</b><small>'+unit+'</small></div>'+
-    '<div class="c-acts">'+
-      '<button class="btn ibtn" data-a="link" title="Copiar enlace vmess" aria-label="Copiar enlace de '+esc(x.nick)+'">'+ic("link")+'</button>'+
-      '<button class="btn ibtn" data-a="edit" title="Editar días" aria-label="Editar días de '+esc(x.nick)+'">'+ic("edit")+'</button>'+
-      '<button class="btn ibtn warn" data-a="del" title="Eliminar" aria-label="Eliminar a '+esc(x.nick)+'">'+ic("trash")+'</button>'+
-    '</div></div>';
+async function load(){
+  S=await api("/api/state");showApp();render();
 }
 
 function render(){
   const u=S.users,q=$("#q").value.trim().toLowerCase();
-  const nOk=u.filter(x=>x.status==="ok"||x.status==="soon").length,nSoon=u.filter(x=>x.status==="soon").length,nExp=u.filter(x=>x.status==="expired").length;
-  $("#sTotal").textContent=u.length;$("#sOk").textContent=nOk;$("#sSoon").textContent=nSoon;$("#sExp").textContent=nExp;
-  document.querySelectorAll(".stat-card").forEach(b=>b.setAttribute("aria-pressed",b.dataset.k===filter));
-  $("#statusPill").className="pill "+(S.running?"online":"offline");
+  $("#sTotal").textContent=u.length;
+  $("#sOk").textContent=u.filter(x=>x.status==="ok"||x.status==="soon").length;
+  $("#sSoon").textContent=u.filter(x=>x.status==="soon").length;
+  $("#sExp").textContent=u.filter(x=>x.status==="expired").length;
+  $("#dot").className="dot "+(S.running?"on":"off");
   $("#statusTxt").textContent=S.running?"V2Ray activo":"V2Ray detenido";
-  const f=u.filter(x=>{
-    if(filter==="active"&&!(x.status==="ok"||x.status==="soon"))return false;
-    if(filter==="soon"&&x.status!=="soon")return false;
-    if(filter==="expired"&&x.status!=="expired")return false;
-    return !q||x.nick.toLowerCase().includes(q)||x.uuid.includes(q);
-  });
-  $("#thead").classList.toggle("hidden",!f.length);
-  if(f.length){$("#list").innerHTML=f.map(rowHTML).join("");return}
-  $("#list").innerHTML=u.length
-    ?'<div class="empty-state"><div class="icon">🔍</div><h3>SIN RESULTADOS</h3><p>Prueba con otro nombre o quita el filtro.</p></div>'
-    :'<div class="empty-state"><div class="icon">🛰️</div><h3>AÚN NO HAY CUENTAS</h3><p>Crea la primera para generar su UUID y su enlace de conexión.</p><button class="btn pri" data-a="new">Nuevo usuario</button></div>';
+  const f=u.filter(x=>!q||x.nick.toLowerCase().includes(q)||x.uuid.includes(q));
+  $("#list").innerHTML=f.length?f.map(x=>{
+    const lab=x.status==="expired"?"VENCIDO":x.status==="sr"?"S/R":(x.days+(x.days===1?" día":" días"));
+    return `<div class="card ${x.status}" data-u="${esc(x.uuid)}">
+      <div class="row"><b>${esc(x.nick)}</b><span class="badge">${lab}</span></div>
+      <button class="uuid" data-a="uuid" title="Copiar UUID">${esc(x.uuid)}</button>
+      <div class="mut">Vence: ${esc(x.exp)}</div>
+      <div class="acts"><button data-a="link">Enlace</button><button data-a="renew">Renovar</button><button class="danger" data-a="del">Eliminar</button></div>
+    </div>`}).join(""):`<div class="empty" style="grid-column:1/-1">${u.length?"Sin resultados":"Aún no hay usuarios. Crea el primero con “+ Nuevo”."}</div>`;
 }
 
-/* ── Eventos ── */
-document.querySelectorAll(".stat-card").forEach(b=>b.addEventListener("click",()=>{filter=b.dataset.k;render()}));
-$("#q").addEventListener("input",render);
-
 $("#list").addEventListener("click",async e=>{
-  const b=e.target.closest("[data-a]");if(!b)return;
-  if(b.dataset.a==="new")return $("#newBtn").click();
-  const row=b.closest(".lrow"),id=row.dataset.u,u=S.users.find(x=>x.uuid===id),a=b.dataset.a;
+  const b=e.target.closest("button[data-a]");if(!b)return;
+  const id=b.closest(".card").dataset.u,u=S.users.find(x=>x.uuid===id),a=b.dataset.a;
   try{
     if(a==="uuid")copy(id,"UUID copiado");
-    else if(a==="link"){const r=await api("/api/users/"+id+"/link");copy(r.link,"Enlace copiado")}
-    else if(a==="edit"){
-      curRenew=u;rMode="set";$("#rNick").textContent=u.nick;
-      $("#rInfo").textContent="Ahora: "+(u.days===null?"sin fecha":(u.status==="expired"?"vencida el "+u.exp:"vence el "+u.exp+" ("+u.days+(u.days===1?" día":" días")+")"))+".";
-      $("#rDays").value=30;setRMode("set");
-      document.querySelectorAll("#dRenew .chips button").forEach(x=>x.classList.toggle("sel",x.textContent==="30"));
-      setErr("#rErr","");updatePrev();$("#dRenew").showModal();
-    }
-    else if(a==="del"){
-      if(!confirm("¿Eliminar a “"+u.nick+"”? Dejará de conectarse y no se puede deshacer."))return;
-      const r=await api("/api/users/"+id,"DELETE");
-      r.restarted?toast("Usuario eliminado"):toast("Eliminado, pero V2Ray no reinició: revísalo",true);
-      await load();
-    }
-  }catch(err){toast(err.message,true)}
+    else if(a==="link"){const r=await api(`/api/users/${id}/link`);copy(r.link,"Enlace copiado")}
+    else if(a==="renew"){curRenew=u;$("#rNick").textContent=u.nick;$("#rInfo").textContent="Vence: "+u.exp+(u.status==="expired"?" (vencido: cuenta desde hoy)":"");$("#rErr").textContent="";$("#dRenew").showModal()}
+    else if(a==="del"){if(!confirm(`¿Eliminar a “${u.nick}”? Esta acción no se puede deshacer.`))return;
+      const r=await api(`/api/users/${id}`,"DELETE");toast(r.restarted?"Eliminado":"Eliminado (revisa V2Ray)");await load()}
+  }catch(err){toast(err.message)}
 });
 
+// chips
 document.querySelectorAll(".chips").forEach(c=>c.addEventListener("click",e=>{
   const b=e.target.closest("button");if(!b)return;
-  $("#"+c.dataset.for).value=b.textContent;$("#"+c.dataset.for).dispatchEvent(new Event("input"));
+  $("#"+c.dataset.for).value=b.textContent;
   c.querySelectorAll("button").forEach(x=>x.classList.toggle("sel",x===b));
 }));
 document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>b.closest("dialog").close()));
 
+// login
 async function doLogin(){
-  setErr("#loginErr","");
+  $("#loginErr").textContent="";
   try{await api("/api/login","POST",{password:$("#pw").value});await load()}
-  catch(e){setErr("#loginErr",e.message)}
+  catch(e){$("#loginErr").textContent=e.message}
 }
 $("#loginBtn").onclick=doLogin;
 $("#pw").addEventListener("keydown",e=>{if(e.key==="Enter")doLogin()});
-$("#logout").onclick=async()=>{try{await api("/api/logout","POST")}catch(e){}showLogin()};
+$("#logout").onclick=async()=>{await api("/api/logout","POST");showLogin()};
+$("#q").addEventListener("input",render);
 
-/* Nuevo */
-$("#newBtn").onclick=()=>{$("#nNick").value="";$("#nDays").value=30;setErr("#nErr","");
-  document.querySelectorAll("#dNew .chips button").forEach(x=>x.classList.toggle("sel",x.textContent==="30"));
-  $("#dNew").showModal();setTimeout(()=>$("#nNick").focus(),50)};
+// nuevo
+$("#newBtn").onclick=()=>{$("#nNick").value="";$("#nDays").value=30;$("#nErr").textContent="";$("#dNew").showModal();setTimeout(()=>$("#nNick").focus(),50)};
 $("#nOk").onclick=async()=>{
-  setErr("#nErr","");$("#nOk").disabled=true;
+  $("#nErr").textContent="";$("#nOk").disabled=true;
   try{
     const r=await api("/api/users","POST",{nick:$("#nNick").value.trim(),days:parseInt($("#nDays").value,10)});
     lastNew=r;$("#dNew").close();
     $("#dNick").textContent=r.nick;$("#dUuid").textContent=r.uuid;$("#dExp").textContent=r.exp;
     $("#dCopyLink").classList.toggle("hidden",!r.link);
     $("#dDone").showModal();await load();
-  }catch(e){setErr("#nErr",e.message)}
+  }catch(e){$("#nErr").textContent=e.message}
   $("#nOk").disabled=false;
 };
 $("#nNick").addEventListener("keydown",e=>{if(e.key==="Enter")$("#nOk").click()});
 $("#dCopyUuid").onclick=()=>copy(lastNew.uuid,"UUID copiado");
 $("#dCopyLink").onclick=()=>copy(lastNew.link,"Enlace copiado");
 
-/* Editar días: fijar (reemplaza) o sumar */
-let rMode="set";
-function setRMode(m){
-  rMode=m;
-  document.querySelectorAll("#dRenew .seg button").forEach(x=>{const on=x.dataset.mode===m;x.classList.toggle("sel",on);x.setAttribute("aria-checked",on)});
-  $("#rLabel").textContent=m==="set"?"NUEVA DURACIÓN (DÍAS DESDE HOY)":"DÍAS A SUMAR";
-}
-const fmtD=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
-function updatePrev(){
-  const el=$("#rPrev"),u=curRenew,n=parseInt($("#rDays").value,10);
-  if(!u||!n||n<1){el.textContent="Escribe cuántos días.";return}
-  const MS=86400000;let todayS,expD=null;
-  if(u.days!==null&&/^\d{4}-\d{2}-\d{2}$/.test(u.exp)){const p=u.exp.split("-").map(Number);expD=new Date(p[0],p[1]-1,p[2]);todayS=new Date(expD.getTime()-u.days*MS)}
-  else{const t=new Date();todayS=new Date(t.getFullYear(),t.getMonth(),t.getDate())}
-  const base=(rMode==="add"&&expD&&u.days>0)?expD:todayS;
-  const res=new Date(base.getFullYear(),base.getMonth(),base.getDate()+n);
-  const total=Math.round((res-todayS)/MS);
-  el.innerHTML=(rMode==="set"?"Vencerá en <b>"+n+"</b> "+(n===1?"día":"días"):"Quedarán <b>"+total+"</b> "+(total===1?"día":"días"))+" · <b>"+fmtD(res)+"</b>";
-}
-document.querySelectorAll("#dRenew .seg button").forEach(b=>b.addEventListener("click",()=>{setRMode(b.dataset.mode);updatePrev()}));
-$("#rDays").addEventListener("input",updatePrev);
+// renovar
 $("#rOk").onclick=async()=>{
-  setErr("#rErr","");
-  try{
-    const r=await api("/api/users/"+curRenew.uuid+(rMode==="set"?"/setdays":"/renew"),"POST",{days:parseInt($("#rDays").value,10)});
-    $("#dRenew").close();toast((rMode==="set"?"Días actualizados · vence el ":"Renovada hasta el ")+r.exp);await load();
-  }catch(e){setErr("#rErr",e.message)}
+  $("#rErr").textContent="";
+  try{const r=await api(`/api/users/${curRenew.uuid}/renew`,"POST",{days:parseInt($("#rDays").value,10)});
+    $("#dRenew").close();toast("Nueva fecha: "+r.exp);await load()}
+  catch(e){$("#rErr").textContent=e.message}
 };
 
-/* Acciones globales */
+// acciones globales
 $("#cleanBtn").onclick=async()=>{
   const n=S.users.filter(x=>x.status==="expired").length;
-  if(!n)return toast("No hay cuentas vencidas");
-  if(!confirm("¿Eliminar "+n+" cuenta(s) vencida(s)?"))return;
-  try{const r=await api("/api/clean","POST");toast(r.deleted+" cuenta(s) eliminada(s)");await load()}catch(e){toast(e.message,true)}
+  if(!n)return toast("No hay usuarios vencidos");
+  if(!confirm(`¿Eliminar ${n} usuario(s) vencido(s)?`))return;
+  try{const r=await api("/api/clean","POST");toast(r.deleted+" eliminado(s)");await load()}catch(e){toast(e.message)}
 };
-/* Servicio V2Ray (dentro de Ajustes) */
-function updateSvc(){
-  const on=!!S.running;
-  const st=$("#svcState");st.textContent=on?"● En ejecución":"● Detenido";st.style.color=on?"var(--accent-2)":"var(--accent-3)";
-  const t=$("#svcToggle");t.className="btn "+(on?"danger":"start");t.innerHTML=ic(on?"stop":"play")+(on?"Detener":"Iniciar");
-}
-async function svcRun(kind){
-  const ask={restart:"¿Reiniciar V2Ray? Las conexiones activas se cortan unos segundos.",stop:"¿Detener V2Ray? Nadie podrá conectarse hasta que lo inicies de nuevo.",start:null}[kind];
-  if(ask&&!confirm(ask))return;
-  const btns=[$("#svcRestart"),$("#svcToggle")];btns.forEach(b=>b.disabled=true);
-  toast({restart:"Reiniciando V2Ray…",stop:"Deteniendo V2Ray…",start:"Iniciando V2Ray…"}[kind]);
-  try{
-    const r=await api("/api/"+kind,"POST");
-    const ok=kind==="restart"?r.restarted:r.ok;
-    ok?toast({restart:"V2Ray reiniciado",stop:"V2Ray detenido",start:"V2Ray iniciado"}[kind]):toast("No se pudo completar la acción. Revisa el servicio en el VPS.",true);
-    await load();
-  }catch(e){toast(e.message,true)}
-  btns.forEach(b=>b.disabled=false);updateSvc();
-}
-$("#svcRestart").onclick=()=>svcRun("restart");
-$("#svcToggle").onclick=()=>svcRun(S.running?"stop":"start");
+$("#restartBtn").onclick=async()=>{
+  if(!confirm("¿Reiniciar V2Ray? Se cortarán las conexiones activas unos segundos."))return;
+  toast("Reiniciando…");
+  try{const r=await api("/api/restart","POST");toast(r.restarted?"V2Ray reiniciado":"No se pudo reiniciar");await load()}catch(e){toast(e.message)}
+};
 
-/* Ajustes */
+// ajustes
 $("#setCopyTok").onclick=()=>copy($("#setTok").value,"Token copiado");
-$("#gear").onclick=()=>{$("#setUrl").value=location.origin+"/";$("#setTok").value=S.settings.api_token||"";
-  $("#setHost").value=S.settings.host||"";$("#setAuto").checked=!!S.settings.auto_clean;setErr("#setErr","");updateSvc();
-  $("#setSec").textContent=location.protocol==="https:"?"🔒 Conexión cifrada (HTTPS).":"⚠ Conexión sin cifrar (HTTP). Para activar HTTPS con el certificado de V2Ray, ejecuta en el VPS: python3 /opt/v2panel/v2panel.py https";
-  $("#dSet").showModal()};
+$("#gear").onclick=()=>{$("#setUrl").value=location.origin+"/";$("#setTok").value=S.settings.api_token||"";$("#setHost").value=S.settings.host||"";$("#setAuto").checked=!!S.settings.auto_clean;$("#setErr").textContent="";$("#dSet").showModal()};
 $("#setOk").onclick=async()=>{
-  try{await api("/api/settings","POST",{host:$("#setHost").value.trim(),auto_clean:$("#setAuto").checked});$("#dSet").close();toast("Ajustes guardados");await load()}
-  catch(e){setErr("#setErr",e.message)}
+  try{await api("/api/settings","POST",{host:$("#setHost").value.trim(),auto_clean:$("#setAuto").checked});$("#dSet").close();toast("Guardado");await load()}
+  catch(e){$("#setErr").textContent=e.message}
 };
 
 load().catch(()=>showLogin());
