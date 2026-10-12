@@ -1652,12 +1652,12 @@ exit 0' >$RCLOCAL
 				verif_ptrs $porta
 				fun_inisocks() {
 					sleep 1
-					screen -dmS proxy python /etc/SSHPlus/proxy.py $porta
+					screen -dmS proxy python3 /etc/SSHPlus/proxy.py $porta
 					[[ $(grep -wc "proxy.py" /etc/autostart) = '0' ]] && {
-						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'proxy' -X quit;  screen -dmS proxy python /etc/SSHPlus/proxy.py $porta; }" >>/etc/autostart
+						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'proxy' -X quit;  screen -dmS proxy python3 /etc/SSHPlus/proxy.py $porta; }" >>/etc/autostart
 					} || {
 						sed -i '/proxy.py/d' /etc/autostart
-						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'proxy' -X quit;  screen -dmS proxy python /etc/SSHPlus/proxy.py $porta; }" >>/etc/autostart
+						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'proxy' -X quit;  screen -dmS proxy python3 /etc/SSHPlus/proxy.py $porta; }" >>/etc/autostart
 					}
 				}
 				echo ""
@@ -1707,12 +1707,12 @@ exit 0' >$RCLOCAL
 				verif_ptrs $porta
 				fun_iniwssocks() {
 					sleep 1
-					screen -dmS ws python /etc/SSHPlus/wsproxy.py $porta
+					screen -dmS ws python3 /etc/SSHPlus/wsproxy.py $porta
 					[[ $(grep -wc "wsproxy.py" /etc/autostart) = '0' ]] && {
-						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS ws python /etc/SSHPlus/wsproxy.py $porta; }" >>/etc/autostart
+						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS ws python3 /etc/SSHPlus/wsproxy.py $porta; }" >>/etc/autostart
 					} || {
 						sed -i '/wsproxy.py/d' /etc/autostart
-						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS ws python /etc/SSHPlus/wsproxy.py $porta; }" >>/etc/autostart
+						echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS ws python3 /etc/SSHPlus/wsproxy.py $porta; }" >>/etc/autostart
 					}
 				}
 				echo ""
@@ -1807,7 +1807,7 @@ exit 0' >$RCLOCAL
 				echo ""
 				abrirptsks() {
 					sleep 1
-					screen -dmS proxy python /etc/SSHPlus/proxy.py $porta
+					screen -dmS proxy python3 /etc/SSHPlus/proxy.py $porta
 					sleep 1
 				}
 				fun_bar 'abrirptsks'
@@ -1898,7 +1898,7 @@ exit 0' >$RCLOCAL
 						screen -wipe >/dev/null
 						_Ptsks="$(cat /tmp/Pt_sks)"
 						sleep 1
-						screen -dmS proxy python /etc/SSHPlus/proxy.py $_Ptsks
+						screen -dmS proxy python3 /etc/SSHPlus/proxy.py $_Ptsks
 						rm /tmp/Pt_sks
 					fi
 				}
@@ -1993,7 +1993,7 @@ exit 0' >$RCLOCAL
 						screen -wipe >/dev/null
 						_Ptwssks="$(cat /tmp/Pt_wssks)"
 						sleep 1
-						screen -dmS ws python /etc/SSHPlus/wsproxy.py $_Ptwssks
+						screen -dmS ws python3 /etc/SSHPlus/wsproxy.py $_Ptwssks
 						rm /tmp/Pt_wssks
 					fi
 				}
