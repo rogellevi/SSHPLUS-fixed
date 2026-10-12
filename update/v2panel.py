@@ -1326,7 +1326,7 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
   </div>
 </div>
 
-<footer class="footer"><div>© <span class="year" id="yr"></span> • Panel V2Ray • <span class="heart">v1.0</span></div><div class="version">Todos los derechos reservados</div></footer>
+<footer class="footer"><div>© <span class="year" id="yr"></span> • Panel V2Ray • <span class="heart">v2.0</span></div><div class="version">Todos los derechos reservados</div></footer>
 
 <!-- ───────── Diálogos ───────── -->
 <dialog class="modal" id="dNew">
