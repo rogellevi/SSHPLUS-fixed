@@ -49,12 +49,12 @@ Habilitar ROOT
 wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/root && bash root
 ~~~~
 
-~~~~
-wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/ufwoc && bash ufwoc
-~~~~
-
 Abrir Puertos:
 
 ~~~~
 wget -O firewall https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/firewall && chmod +x firewall && sudo ./firewall
+~~~~
+
+~~~~
+wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/ufwoc && bash ufwoc
 ~~~~
