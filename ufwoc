@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# 1. Verificar que se está ejecutando como root
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Error: Por favor, ejecuta este script como root o usando sudo."
+  exit 1
+fi
+
+echo "==> [1/4] Actualizando repositorios e instalando UFW..."
+apt-get update -y
+apt-get install -y ufw
+
+echo "==> [2/4] Aplicando reglas de puertos en UFW..."
+# SSH
+ufw allow 22/tcp
+ufw allow 22/udp
+# Rangos
+ufw allow 7100:7500/tcp
+ufw allow 7100:7500/udp
+ufw allow 441:445/tcp
+# Puertos específicos
+ufw allow 80,8080,8888,5454,5555,7000,8000,81/tcp
+ufw allow 80,8080,8888,5454,5555,7000,8000,81/udp
+
+echo "==> [3/4] Habilitando UFW y eliminando netfilter-persistent..."
+# El flag --force evita el prompt de confirmación al habilitar
+ufw --force enable 
+
+# Eliminamos netfilter-persistent para evitar conflictos de reglas al reiniciar
+apt-get remove -y netfilter-persistent
+apt-get autoremove -y
+
+echo "==> [4/4] ¡Todo listo! Reiniciando el sistema en 5 segundos para aplicar cambios..."
+sleep 5
+reboot
