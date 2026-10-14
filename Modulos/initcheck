@@ -228,7 +228,7 @@ inst_depedencias() {
         sleep 0.1
     } || {
         cd $HOME
-        wget https://raw.githubusercontent.com/rogellevi/SSHPLUS/master/Modulos/check.py -o /dev/null
+        wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Modulos/check.py -o /dev/null
         mv -f $HOME/check.py /etc/SSHPlus/check.py
     }
 
@@ -236,7 +236,7 @@ inst_depedencias() {
         sleep 0.1
     } || {
         cd $HOME
-        wget https://raw.githubusercontent.com/rogellevi/SSHPLUS/master/Modulos/4gcheck.py -o /dev/null
+        wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Modulos/4gcheck.py -o /dev/null
         mv -f $HOME/4gcheck.py /etc/SSHPlus/4gcheck.py
     }
 
@@ -244,7 +244,7 @@ inst_depedencias() {
         sleep 0.1
     } || {
         cd $HOME
-        wget https://raw.githubusercontent.com/rogellevi/SSHPLUS/master/Modulos/check -o /dev/null
+        wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/Modulos/check -o /dev/null
         mv -f $HOME/check /bin/check
         chmod 777 /bin/check
     }
