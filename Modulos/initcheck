@@ -1,15 +1,11 @@
 #!/bin/bash
-#====================================================
-#	CheckUser Manager
-#====================================================
-
 verif_ptrs() {
     porta=$1
-    PT=$(lsof -V -i tcp -P -n 2>/dev/null | grep -v "ESTABLISHED" | grep -v "COMMAND" | grep "LISTEN")
+    PT=$(lsof -V -i tcp -P -n | grep -v "ESTABLISHED" | grep -v "COMMAND" | grep "LISTEN")
     for pton in $(echo -e "$PT" | cut -d: -f2 | cut -d' ' -f1 | uniq); do
         svcs=$(echo -e "$PT" | grep -w "$pton" | awk '{print $1}' | uniq)
         [[ "$porta" = "$pton" ]] && {
-            echo -e "\n  \033[1;31mPuerto \033[1;33m$porta \033[1;31men uso por \033[1;37m$svcs\033[0m"
+            echo -e "\n\033[1;31mPuerto \033[1;33m$porta \033[1;31men uso por \033[1;37m$svcs\033[0m"
             sleep 3
             fun_initcheck
         }
@@ -20,216 +16,261 @@ fun_bar() {
     comando[0]="$1"
     comando[1]="$2"
     (
-        [[ -e $HOME/fim ]] && rm -f $HOME/fim
+        [[ -e $HOME/fim ]] && rm $HOME/fim
         ${comando[0]} >/dev/null 2>&1
         ${comando[1]} >/dev/null 2>&1
         touch $HOME/fim
     ) >/dev/null 2>&1 &
     tput civis
-    echo -ne "  \033[1;33mEspera \033[1;37m- \033[1;33m["
+    echo -ne "\033[1;33mESPERA \033[1;37m- \033[1;33m["
     while true; do
         for ((i = 0; i < 18; i++)); do
             echo -ne "\033[1;31m#"
             sleep 0.1s
         done
-        [[ -e $HOME/fim ]] && rm -f $HOME/fim && break
+        [[ -e $HOME/fim ]] && rm $HOME/fim && break
         echo -e "\033[1;33m]"
         sleep 1s
         tput cuu1
         tput dl1
-        echo -ne "  \033[1;33mEspera \033[1;37m- \033[1;33m["
+        echo -ne "\033[1;33mESPERA \033[1;37m- \033[1;33m["
     done
-    echo -e "\033[1;33m]\033[1;37m - \033[1;32mOK\033[1;37m"
+    echo -e "\033[1;33m]\033[1;37m -\033[1;32m OK !\033[1;37m"
     tput cnorm
 }
 
-fun_formato_fecha() {
-    while true; do
-        clear
-        echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
-        echo -e "  \033[1;36mFORMATO DE FECHA PARA CHECKUSER\033[0m"
-        echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
-        echo ""
-        echo -e "  \033[1;33mEl formato de la fecha puede variar dependiendo\033[0m"
-        echo -e "  \033[1;33mde la programación de tu aplicación.\033[0m"
-        echo -e "  \033[1;33mSelecciona el formato según tu necesidad.\033[0m"
-        echo ""
-        echo -e "  \033[1;36m[1]\033[0m \033[1;37mYYYY/MM/DD\033[0m  \033[1;33m(más común · 2025/12/31)\033[0m"
-        echo -e "  \033[1;36m[2]\033[0m \033[1;37mDD/MM/YYYY\033[0m  \033[1;33m(31/12/2025)\033[0m"
-        echo ""
-        echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
-        echo -ne "  \033[1;32mOpción:\033[0m "
-        read -r fmt
-        case "$fmt" in
-            1|01) FORMATO="1" ; break ;;
-            2|02) FORMATO="2" ; break ;;
-            *) echo -e "\n  \033[1;31mOpción no válida.\033[0m" ; sleep 1 ;;
-        esac
-    done
-    export FORMATO
-}
-
 fun_initcheck() {
-    while true; do
-        clear
-        var_sks1=$(ps x | grep "checkuser" | grep -v grep >/dev/null && echo -e "\033[1;32m● " || echo -e "\033[1;31m○ ")
-        var_sks2=$(ps x | grep "4gcheck" | grep -v grep >/dev/null && echo -e "\033[1;32m● " || echo -e "\033[1;31m○ ")
-
-        echo -e "\033[0;34m╔══════════════════════════════════════════════════╗\033[0m"
-        echo -e "\033[0;34m║\033[0m\033[1;37m               \033[1;36mADMINISTRAR CHECKUSER\033[1;37m              \033[0;34m║\033[0m"
-        echo -e "\033[0;34m╚══════════════════════════════════════════════════╝\033[0m"
-        echo ""
-        echo -e "  \033[1;36m01\033[0m) \033[1;37mCheckUser (estándar)\033[0m $var_sks1"
-        echo -e "  \033[1;36m02\033[0m) \033[1;37mCheckUser (Conecta4G)\033[0m $var_sks2"
-        echo -e "  \033[1;36m00\033[0m) \033[1;32m‹ Volver\033[0m"
-        echo ""
-        echo -e "\033[0;34m──────────────────────────────────────────────────\033[0m"
-        echo -ne "  \033[1;32mSelecciona una opción:\033[0m "
-        read -r resposta
-
-        case "$resposta" in
-        1|01)
-            if ps x | grep -w checkuser | grep -v grep >/dev/null 2>&1; then
-                clear
-                echo -e "\033[0;34m──\033[0m \033[1;36mCHECKUSER (ESTÁNDAR)\033[0m \033[0;34m──\033[0m"
-                echo ""
-                echo -e "  \033[1;32mDeteniendo CheckUser...\033[0m\n"
-                fun_stopbad() {
-                    screen -r -S "checkuser" -X quit 2>/dev/null
-                    screen -wipe >/dev/null 2>&1
+    clear
+    echo -e "\E[44;1;37m            ADMINISTRAR CHECKUSER             \E[0m"
+    echo ""
+    var_sks1=$(ps x | grep "checkuser" | grep -v grep >/dev/null && echo -e "\033[1;32m◉ " || echo -e "\033[1;31m○ ")
+    var_sks2=$(ps x | grep "4gcheck" | grep -v grep >/dev/null && echo -e "\033[1;32m◉ " || echo -e "\033[1;31m○ ")
+    echo ""
+    echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;37m• \033[1;33mACTIVAR CHECKUSER (ESTÁNDAR) $var_sks1 \033[0m"
+    echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;37m• \033[1;33mACTIVAR CHECKUSER (CONECTA4G) $var_sks2 \033[0m"
+    echo -e "\033[1;31m[\033[1;36m0\033[1;31m] \033[1;37m• \033[1;33mVOLVER\033[0m"
+    echo ""
+    echo -ne "\033[1;32m¿QUÉ DESEAS HACER \033[1;33m?\033[1;37m "
+    read resposta
+    if [[ "$resposta" = '1' ]]; then
+        if ps x | grep -w checkuser | grep -v grep 1>/dev/null 2>/dev/null; then
+            clear
+            echo -e "\E[41;1;37m             CHECKUSER (ESTÁNDAR)              \E[0m"
+            echo ""
+            fun_stopbad() {
+                screen -r -S "checkuser" -X quit
+                [[ $(grep -wc "check.py" /etc/autostart) != '0' ]] && {
+                    sed -i '/check.py/d' /etc/autostart
                 }
-                fun_bar 'fun_stopbad'
-                echo -e "\n  \033[1;32m✓ CheckUser detenido.\033[0m\n"
-                sleep 2
+                sleep 1
+                screen -wipe >/dev/null
+            }
+            echo -e "\033[1;32mDESACTIVANDO CHECKUSER (ESTÁNDAR)\033[1;33m"
+            echo ""
+            fun_stopbad
+            echo ""
+            echo -e "\033[1;32m¡CHECKUSER (ESTÁNDAR) DESACTIVADO CORRECTAMENTE!\033[1;33m"
+            sleep 3
+            fun_initcheck
+        else
+            clear
+            echo -e "\E[44;1;37m            ACTIVAR CHECKUSER (ESTÁNDAR)             \E[0m"
+            echo ""
+            echo -ne "\033[1;32m¿QUÉ PUERTO DESEAS UTILIZAR \033[1;33m?\033[1;37m: "
+            read porta
+            [[ $porta != ?(+|-)+([0-9]) ]] && {
+                echo ""
+                echo -e "\033[1;31m¡Puerto no válido!"
+                sleep 3
+                clear
+                fun_initcheck
+            }
+            verif_ptrs $porta
+            fun_check() {
+                screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta 1
+                [[ $(grep -wc "check.py" /etc/autostart) = '0' ]] && {
+                    echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta 1; }" >>/etc/autostart
+                } || {
+                    sed -i '/check.py/d' /etc/autostart
+                    echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta 1; }" >>/etc/autostart
+                }
+                sleep 1
+            }
+
+            fun_check2() {
+                screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta 2
+                [[ $(grep -wc "check.py" /etc/autostart) = '0' ]] && {
+                    echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta 2; }" >>/etc/autostart
+                } || {
+                    sed -i '/check.py/d' /etc/autostart
+                    echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta 2; }" >>/etc/autostart
+                }
+                sleep 1
+            }
+            echo ""
+            echo -e "\033[1;32m¿QUÉ FORMATO DESEAS UTILIZAR? \033[1;33m?\033[1;37m: "
+            echo -e "\033[1;31mEL FORMATO DE FECHA PUEDE VARIAR SEGÚN LA PROGRAMACIÓN DE TU APLICACIÓN.\033[0m"
+            echo -e "\033[1;31mSELECCIONA EL FORMATO SEGÚN TU NECESIDAD.\033[0m"
+            echo ""
+            echo -e "\033[1;31m[\033[1;36m1\033[1;31m] \033[1;37m• \033[1;33mFORMATO YYYY/MM/DD (MÁS COMÚN)\033[0m"
+            echo -e "\033[1;31m[\033[1;36m2\033[1;31m] \033[1;37m• \033[1;33mFORMATO DD/MM/YYYY\033[0m"
+            echo ""
+            echo -ne "\033[1;36mOpción: \033[1;37m"
+            read resposta
+            if [[ "$resposta" = '1' ]]; then
+                echo ""
+                fun_bar 'fun_check'
+            elif [[ "$resposta" = '2' ]]; then
+                echo ""
+                fun_bar 'fun_check2'
             else
-                clear
-                echo -e "\033[0;34m──\033[0m \033[1;36mCHECKUSER (ESTÁNDAR)\033[0m \033[0;34m──\033[0m"
                 echo ""
-                echo -ne "  \033[1;32m¿Qué puerto deseas utilizar?:\033[0m "
-                read -r porta
-                [[ -z "$porta" ]] && {
-                    echo -e "\n  \033[1;31mPuerto no válido.\033[0m"
-                    sleep 2
-                    continue
-                }
-                verif_ptrs "$porta"
-
-                fun_formato_fecha
-
-                echo -e "\n  \033[1;32mIniciando CheckUser...\033[0m\n"
-                fun_inisks() {
-                    screen -dmS checkuser python3 /etc/SSHPlus/check.py "$porta" "$FORMATO"
-                    [[ $(grep -wc "checkuser" /etc/autostart 2>/dev/null) = '0' ]] && {
-                        echo -e "ps x | grep 'checkuser' | grep -v 'grep' || screen -dmS checkuser python3 /etc/SSHPlus/check.py $porta $FORMATO" >> /etc/autostart
-                    }
-                }
-                fun_bar 'fun_inisks'
-                IP=$(curl -s icanhazip.com 2>/dev/null || cat /etc/IP 2>/dev/null)
-                echo -e "\n  \033[1;32m✓ CheckUser activo.\033[0m"
-                echo -e "  \033[1;33mURL:\033[0m http://$IP:$porta/checkUser"
-                echo -e "  \033[1;33mFormato:\033[0m $([ "$FORMATO" = "1" ] && echo 'YYYY/MM/DD' || echo 'DD/MM/YYYY')\n"
-                echo -ne "  \033[1;36mPresiona ENTER para continuar:\033[0m "
-                read -r _
+                echo -e "\033[1;31m¡Opción no válida!\033[0m"
+                sleep 3
+                fun_initcheck
             fi
-            ;;
-        2|02)
-            if ps x | grep -w 4gcheck | grep -v grep >/dev/null 2>&1; then
-                clear
-                echo -e "\033[0;34m──\033[0m \033[1;36mCHECKUSER (CONECTA4G)\033[0m \033[0;34m──\033[0m"
-                echo ""
-                echo -e "  \033[1;32mDeteniendo CheckUser 4G...\033[0m\n"
-                fun_stop4g() {
-                    screen -r -S "4gcheck" -X quit 2>/dev/null
-                    screen -wipe >/dev/null 2>&1
+            echo ""
+            echo -e "\033[1;32m¡CHECKUSER (ESTÁNDAR) ACTIVADO CORRECTAMENTE!\033[1;33m"
+            echo ""
+            IP=$(curl -s icanhazip.com)
+            echo "URL: http://$IP:$porta/checkUser"
+            echo ""
+            echo -ne "\033[1;36mPresiona ENTER para continuar: \033[1;37m"
+            read x
+            fun_initcheck
+        fi
+    elif [[ "$resposta" = '2' ]]; then
+        if ps x | grep -w 4gcheck | grep -v grep 1>/dev/null 2>/dev/null; then
+            clear
+            echo -e "\E[41;1;37m             CHECKUSER (CONECTA4G)              \E[0m"
+            echo ""
+            fun_stopbad() {
+                screen -r -S "4gcheck" -X quit
+                [[ $(grep -wc "4gcheck.py" /etc/autostart) != '0' ]] && {
+                    sed -i '/4gcheck.py/d' /etc/autostart
                 }
-                fun_bar 'fun_stop4g'
-                echo -e "\n  \033[1;32m✓ CheckUser 4G detenido.\033[0m\n"
-                sleep 2
-            else
-                clear
-                echo -e "\033[0;34m──\033[0m \033[1;36mCHECKUSER (CONECTA4G)\033[0m \033[0;34m──\033[0m"
-                echo ""
-                echo -ne "  \033[1;32m¿Qué puerto deseas utilizar?:\033[0m "
-                read -r porta
-                [[ -z "$porta" ]] && {
-                    echo -e "\n  \033[1;31mPuerto no válido.\033[0m"
-                    sleep 2
-                    continue
-                }
-                verif_ptrs "$porta"
-                echo -e "\n  \033[1;32mIniciando CheckUser 4G...\033[0m\n"
-                fun_ini4g() {
-                    screen -dmS 4gcheck python3 /etc/SSHPlus/4gcheck.py "$porta"
-                    [[ $(grep -wc "4gcheck" /etc/autostart 2>/dev/null) = '0' ]] && {
-                        echo -e "ps x | grep '4gcheck' | grep -v 'grep' || screen -dmS 4gcheck python3 /etc/SSHPlus/4gcheck.py $porta" >> /etc/autostart
-                    }
-                }
-                fun_bar 'fun_ini4g'
-                IP=$(curl -s icanhazip.com 2>/dev/null || cat /etc/IP 2>/dev/null)
-                echo -e "\n  \033[1;32m✓ CheckUser 4G activo.\033[0m"
-                echo -e "  \033[1;33mURL:\033[0m http://$IP:$porta/checkUser\n"
-                echo -ne "  \033[1;36mPresiona ENTER para continuar:\033[0m "
-                read -r _
-            fi
-            ;;
-        0|00)
-            echo -e "\n  \033[1;31mVolviendo...\033[0m"
+                sleep 1
+                screen -wipe >/dev/null
+            }
+            echo -e "\033[1;32mDESACTIVANDO CHECKUSER (CONECTA4G)\033[1;33m"
+            echo ""
+            fun_stopbad
+            echo ""
+            echo -e "\033[1;32m¡CHECKUSER (CONECTA4G) DESACTIVADO CORRECTAMENTE!\033[1;33m"
             sleep 1
-            menu 2>/dev/null || exit 0
-            ;;
-        *)
-            echo -e "\n  \033[1;31mOpción no válida.\033[0m"
-            sleep 1
-            ;;
-        esac
-    done
+            fun_initcheck
+        else
+            clear
+            echo -e "\E[44;1;37m            ACTIVAR CHECKUSER (CONECTA4G)             \E[0m"
+            echo ""
+            echo -ne "\033[1;32m¿QUÉ PUERTO DESEAS UTILIZAR \033[1;33m?\033[1;37m: "
+            read porta
+            [[ $porta != ?(+|-)+([0-9]) ]] && {
+                echo ""
+                echo -e "\033[1;31m¡Puerto no válido!"
+                sleep 3
+                clear
+                fun_initcheck
+            }
+            verif_ptrs $porta
+
+            fun_udpon() {
+                screen -dmS 4gcheck python3 /etc/SSHPlus/4gcheck.py $porta
+                [[ $(grep -wc "4gcheck.py" /etc/autostart) = '0' ]] && {
+                    echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS checkuser python3 /etc/SSHPlus/4gcheck.py $porta; }" >>/etc/autostart
+                } || {
+                    sed -i '/check.py/d' /etc/autostart
+                    echo -e "netstat -tlpn | grep -w $porta > /dev/null || {  screen -r -S 'ws' -X quit;  screen -dmS checkuser python3 /etc/SSHPlus/4gcheck.py $porta; }" >>/etc/autostart
+                }
+                sleep 1
+            }
+            echo ""
+            fun_bar 'fun_udpon'
+            echo ""
+            echo -e "\033[1;32m¡CHECKUSER (CONECTA4G) ACTIVADO CORRECTAMENTE!\033[1;33m"
+            echo ""
+            IP=$(curl -s icanhazip.com)
+            echo "URL: http://$IP:$porta/checkUser"
+            echo ""
+            echo -ne "\033[1;36mPresiona ENTER para continuar: \033[1;37m"
+            read x
+            fun_initcheck
+        fi
+    elif [[ "$resposta" = '0' ]]; then
+        echo ""
+        echo -e "\033[1;31mVolviendo...\033[0m"
+        sleep 1
+        menu
+    else
+        echo ""
+        echo -e "\033[1;31m¡Opción no válida!\033[0m"
+        sleep 1
+        fun_initcheck
+    fi
 }
 
 inst_depedencias() {
     if ! [ -x "$(command -v pip3)" ]; then
-        echo -e "  \033[1;33mpip3 no está instalado. Instalando...\033[0m"
-        apt-get install -y python3-pip >/dev/null 2>&1
+        echo 'Error: pip3 no está instalado.' >&2
+        echo 'Instala pip3 y ejecuta el script de nuevo.' >&2
+
+        if ! apt-get install -y python3-pip; then
+            echo 'Error al instalar pip3' >&2
+            exit 1
+        else
+            echo 'pip3 instalado correctamente'
+        fi
     fi
+
     pip3 install flask >/dev/null 2>&1
 
-    [[ ! -e "/etc/SSHPlus/check.py" ]] && {
-        cd "$HOME" || return
-        wget -q https://www.dropbox.com/s/2s1u9kmfgkj6l4r/check.py -O /etc/SSHPlus/check.py 2>/dev/null
+    [[ -e "/etc/SSHPlus/check.py" ]] && {
+        sleep 0.1
+    } || {
+        cd $HOME
+        wget https://www.dropbox.com/s/2s1u9kmfgkj6l4r/check.py -o /dev/null
+        mv -f $HOME/check.py /etc/SSHPlus/check.py
     }
-    [[ ! -e "/etc/SSHPlus/4gcheck.py" ]] && {
-        cd "$HOME" || return
-        wget -q https://www.dropbox.com/s/oe3m2gc0sh52hq1/4gcheck.py -O /etc/SSHPlus/4gcheck.py 2>/dev/null
+
+    [[ -e "/etc/SSHPlus/4gcheck.py" ]] && {
+        sleep 0.1
+    } || {
+        cd $HOME
+        wget https://www.dropbox.com/s/oe3m2gc0sh52hq1/4gcheck.py -o /dev/null
+        mv -f $HOME/4gcheck.py /etc/SSHPlus/4gcheck.py
     }
-    [[ ! -e "/bin/check" ]] && {
-        cd "$HOME" || return
-        wget -q https://www.dropbox.com/s/f68x0kiijx0w9r7/check -O /bin/check 2>/dev/null
-        chmod 777 /bin/check 2>/dev/null
+
+    [[ -e "/bin/check" ]] && {
+        sleep 0.1
+    } || {
+        cd $HOME
+        wget https://www.dropbox.com/s/f68x0kiijx0w9r7/check -o /dev/null
+        mv -f $HOME/check /bin/check
+        chmod 777 /bin/check
     }
 }
 
-# Entrada principal
-if [[ -e "/etc/SSHPlus/check.py" ]] && [[ -e "/etc/SSHPlus/4gcheck.py" ]] && [[ -e "/bin/check" ]]; then
+[[ -e "/etc/SSHPlus/check.py" ]] && [[ -e "/etc/SSHPlus/4gcheck.py" ]] && [[ -e "/bin/check" ]] && {
     fun_initcheck
-else
+} || {
     clear
-    echo -e "\033[0;34m╔══════════════════════════════════════════════════╗\033[0m"
-    echo -e "\033[0;34m║\033[0m\033[1;37m           \033[1;36mINSTALADOR CHECKUSER\033[1;37m                   \033[0;34m║\033[0m"
-    echo -e "\033[0;34m╚══════════════════════════════════════════════════╝\033[0m"
+    echo -e "\E[44;1;37m           INSTALADOR CHECKUSER             \E[0m"
+    echo -e "\n\033[1;33mESTÁS A PUNTO DE INSTALAR CHECKUSER !\033[0m"
     echo ""
-    echo -e "  \033[1;33mEstás a punto de instalar CheckUser.\033[0m"
-    echo ""
-    echo -ne "  \033[1;32m¿Deseas continuar?\033[0m [s/n]: "
-    read -r resposta
-    if [[ "$resposta" = 's' || "$resposta" = 'S' ]]; then
+    echo -ne "\033[1;32m¿DESEAS CONTINUAR \033[1;31m? \033[1;33m[s/n]:\033[1;37m "
+    read resposta
+    [[ "$resposta" = 's' ]] && {
         clear
-        echo -e "\n  \033[1;32mInstalando CheckUser...\033[0m\n"
+        echo -e "\E[41;1;37m             INSTALANDO CHECKUSER...              \E[0m"
+        echo ""
         fun_bar 'inst_depedencias'
-        echo -e "\n  \033[1;32m✓ CheckUser instalado.\033[0m\n"
-        sleep 2
+        echo -e "\033[1;32mCHECKUSER INSTALADO\033[1;33m"
+        sleep 3
         fun_initcheck
-    else
-        echo -e "\n  \033[1;31mVolviendo...\033[0m"
-        sleep 1
-        menu 2>/dev/null || exit 0
-    fi
-fi
+    } || {
+        echo -e "\n\033[1;31mVolviendo...\033[0m"
+        sleep 2
+        clear
+        menu
+    }
+}
