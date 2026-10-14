@@ -56,5 +56,5 @@ wget -O firewall https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/main/
 ~~~~
 
 ~~~~
-wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/ufwoc && bash ufwoc
+wget https://raw.githubusercontent.com/rogellevi/SSHPLUS-fixed/master/ufwoc && chmod +x ufwoc && sudo ./ufwoc
 ~~~~
