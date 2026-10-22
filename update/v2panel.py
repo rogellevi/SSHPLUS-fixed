@@ -26,7 +26,7 @@ import time
 import uuid as uuidlib
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode, quote
 
 # ---------------------------------------------------------------- rutas ----
 PANEL_CFG = os.environ.get("V2PANEL_CONFIG", "/etc/v2panel/config.json")
@@ -153,27 +153,88 @@ def find_clients(cfg):
     raise ApiError("No se encontró la lista 'clients' en config.json de V2Ray", 500)
 
 
+CLIENT_PROTOS = ("vmess", "vless")
+
+
+def _has_clients(ib):
+    return isinstance((ib.get("settings") or {}).get("clients"), list)
+
+
+def client_inbounds(cfg):
+    """[(inbound, n)] de los inbounds vmess/vless con lista 'clients'.
+    n = posición entre TODAS las listas '"clients": [' del archivo (sirve para la edición por texto)."""
+    inbounds = cfg.get("inbounds") or ([cfg["inbound"]] if "inbound" in cfg else [])
+    with_cl = [ib for ib in inbounds if _has_clients(ib)]
+    out = [(ib, n) for n, ib in enumerate(with_cl) if ib.get("protocol") in CLIENT_PROTOS]
+    if not out and with_cl:  # compatibilidad: otro protocolo, se usa el primero como antes
+        out = [(with_cl[0], 0)]
+    if not out:
+        raise ApiError("No se encontró la lista 'clients' en config.json de V2Ray", 500)
+    return out
+
+
+def _ids(ib):
+    return {str(c.get("id", "")).lower() for c in ib["settings"]["clients"]}
+
+
 def ids_of(text):
-    return sorted(str(c.get("id", "")).lower() for c in find_clients(json.loads(text))[1])
+    """UUIDs presentes en cualquiera de los inbounds (vmess/vless)."""
+    return sorted(set().union(*[_ids(ib) for ib, _ in client_inbounds(json.loads(text))]))
 
 
-def text_add(text, client):
-    """Inserta el cliente justo bajo '"clients": [' (igual que tu bash) sin tocar el resto."""
+def ids_per_inbound(text):
+    return [_ids(ib) for ib, _ in client_inbounds(json.loads(text))]
+
+
+DEFAULT_VLESS_FLOW = "xtls-rprx-vision"
+
+
+def vless_flow(ib):
+    """Flow de un inbound vless: el de sus clientes actuales. Si no tiene clientes
+    y es tcp con tls/reality, se usa xtls-rprx-vision por defecto."""
+    if ib.get("protocol") != "vless":
+        return ""
+    cl = ib["settings"]["clients"]
+    for c in cl:
+        if c.get("flow"):
+            return str(c["flow"])
+    ss = ib.get("streamSettings") or {}
+    if not cl and ss.get("network", "tcp") == "tcp" and ss.get("security") in ("tls", "reality"):
+        return DEFAULT_VLESS_FLOW
+    return ""
+
+
+def client_for(ib, a, first=True, flow=""):
+    """Cliente para un inbound concreto: vmess lleva alterId, vless no (y puede llevar flow).
+    Email distinto por inbound."""
+    mail = a["email"] if first else a["email"].replace("@", ".%s@" % ib.get("protocol", "x"), 1)
+    c = {"id": a["id"], "email": mail}
+    if ib.get("protocol") != "vless":
+        c["alterId"] = 0
+    elif flow:
+        c["flow"] = flow
+    return c
+
+
+def text_add(text, client, nth=0):
+    """Inserta el cliente justo bajo el nth '"clients": [' (igual que tu bash) sin tocar el resto."""
     lines = text.split("\n")
-    for i, l in enumerate(lines):
-        if re.search(r'"clients"\s*:\s*\[\s*$', l):
-            break
-    else:
+    hits = [i for i, l in enumerate(lines) if re.search(r'"clients"\s*:\s*\[\s*$', l)]
+    if nth >= len(hits):
         return None
+    i = hits[nth]
     ind = re.match(r"\s*", lines[i]).group(0) + "  "
     j = i + 1
     while j < len(lines) and not lines[j].strip():
         j += 1
     last = j < len(lines) and lines[j].strip().startswith("]")
-    block = [
-        ind + "{",
-        ind + '  "alterId": 0,',
-        ind + '  "id": "%s",' % client["id"],
+    block = [ind + "{"]
+    if "alterId" in client:  # solo vmess; vless no usa alterId
+        block.append(ind + '  "alterId": 0,')
+    block.append(ind + '  "id": "%s",' % client["id"])
+    if client.get("flow"):
+        block.append(ind + '  "flow": "%s",' % client["flow"])
+    block += [
         ind + '  "email": "%s"' % client["email"],
         ind + ("}" if last else "},"),
     ]
@@ -181,59 +242,68 @@ def text_add(text, client):
     return "\n".join(lines)
 
 
-def text_del(text, uid):
+def text_del(text, uid, expected=1):
+    """Quita el cliente de cada inbound donde esté (expected = cuántas veces debe aparecer)."""
     lines = text.split("\n")
     idx = [i for i, l in enumerate(lines) if re.search(r'"id"\s*:\s*"%s"' % re.escape(uid), l, re.I)]
-    if len(idx) != 1:
+    if len(idx) != expected:
         return None
-    i = idx[0]
-    s = i
-    while s >= 0 and not lines[s].strip().startswith("{"):
-        s -= 1
-    e = i
-    while e < len(lines) and not lines[e].strip().startswith("}"):
-        e += 1
-    if s < 0 or e >= len(lines):
-        return None
-    had_comma = lines[e].strip().endswith(",")
-    del lines[s:e + 1]
-    if not had_comma:  # era el último: quitar coma del anterior
-        k = s - 1
-        while k >= 0 and not lines[k].strip():
-            k -= 1
-        if k >= 0 and lines[k].rstrip().endswith(","):
-            lines[k] = lines[k].rstrip()[:-1]
+    for i in reversed(idx):  # de abajo hacia arriba para no mover los índices pendientes
+        s = i
+        while s >= 0 and not lines[s].strip().startswith("{"):
+            s -= 1
+        e = i
+        while e < len(lines) and not lines[e].strip().startswith("}"):
+            e += 1
+        if s < 0 or e >= len(lines):
+            return None
+        had_comma = lines[e].strip().endswith(",")
+        del lines[s:e + 1]
+        if not had_comma:  # era el último: quitar coma del anterior
+            k = s - 1
+            while k >= 0 and not lines[k].strip():
+                k -= 1
+            if k >= 0 and lines[k].rstrip().endswith(","):
+                lines[k] = lines[k].rstrip()[:-1]
     return "\n".join(lines)
 
 
 def apply_config(adds=(), removes=()):
-    """Agrega/quita clientes. Intenta edición por texto (conserva formato y el bash
-    sigue funcionando); si falla la verificación, reescribe el JSON completo."""
+    """Agrega/quita clientes ({'id','email'}) en TODOS los inbounds vmess/vless.
+    Intenta edición por texto (conserva formato y el bash sigue funcionando); si falla
+    la verificación, reescribe el JSON completo."""
     with open(V2CFG, encoding="utf-8") as f:
         original = f.read()
-    before = ids_of(original)
-    rm = [r.lower() for r in removes if r.lower() in before]
-    want = sorted([i for i in before if i not in rm] + [a["id"].lower() for a in adds])
-    if not rm and not adds:
+    ibs = client_inbounds(json.loads(original))
+    before = [_ids(ib) for ib, _ in ibs]
+    flows = [vless_flow(ib) for ib, _ in ibs]  # antes de modificar nada
+    rm = {r.lower() for r in removes}
+    todo = [[a for a in adds if a["id"].lower() not in before[k]] for k in range(len(ibs))]
+    want = [(before[k] - rm) | {a["id"].lower() for a in todo[k]} for k in range(len(ibs))]
+    if want == before:
         return False
 
     new = original
     try:
         for r in rm:
-            new = text_del(new, r) if new else None
-        for a in adds:
-            new = text_add(new, a) if new else None
-        ok = bool(new) and ids_of(new) == want
+            n = sum(r in b for b in before)
+            if n:
+                new = text_del(new, r, n) if new else None
+        for k, (ib, nth) in enumerate(ibs):
+            for a in todo[k]:
+                new = text_add(new, client_for(ib, a, first=(k == 0), flow=flows[k]), nth) if new else None
+        ok = bool(new) and ids_per_inbound(new) == want
     except Exception:
         ok = False
 
     if not ok:  # plan B: reescritura completa del JSON
         cfg = json.loads(original)
-        _, cl = find_clients(cfg)
-        cl[:] = [c for c in cl if str(c.get("id", "")).lower() not in rm]
-        cl.extend(adds)
+        for k, (ib, _) in enumerate(client_inbounds(cfg)):
+            cl = ib["settings"]["clients"]
+            cl[:] = [c for c in cl if str(c.get("id", "")).lower() not in rm]
+            cl.extend([client_for(ib, a, first=(k == 0), flow=flows[k]) for a in todo[k]])
         new = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
-        if ids_of(new) != want:
+        if ids_per_inbound(new) != want:
             raise ApiError("No se pudo editar config.json de forma segura", 500)
 
     backup(V2CFG)
@@ -279,33 +349,68 @@ def v2ray_status():
         return False
 
 
-def build_link(u, host_hint):
+def build_links(u, host_hint):
+    """Un enlace por cada inbound vmess/vless del config (p. ej. [vmess://..., vless://...])."""
     try:
         with open(V2CFG, encoding="utf-8") as f:
-            ib, _ = find_clients(json.load(f))
+            cfg_v2 = json.load(f)
+        ibs = [ib for ib, _ in client_inbounds(cfg_v2)]
     except Exception:
-        return None
-    if ib.get("protocol") != "vmess":
-        return None
-    ss = ib.get("streamSettings") or {}
-    net = ss.get("network", "tcp")
-    tls = ss.get("security") == "tls"
+        return []
+    ibs = [ib for ib in ibs if ib.get("protocol") in CLIENT_PROTOS]
+    multi = len(ibs) > 1
     cfg = load_panel_cfg()
     addr = cfg.get("host") or host_hint
-    path = hdr_host = ""
-    if net == "ws":
-        ws = ss.get("wsSettings") or {}
-        path = ws.get("path", "/")
-        hdr_host = (ws.get("headers") or {}).get("Host", "")
-    elif net == "grpc":
-        path = (ss.get("grpcSettings") or {}).get("serviceName", "")
-    obj = {
-        "v": "2", "ps": u["nick"], "add": addr, "port": str(ib.get("port", "")),
-        "id": u["uuid"], "aid": "0", "scy": "auto", "net": net, "type": "none",
-        "host": hdr_host or (addr if tls else ""), "path": path,
-        "tls": "tls" if tls else "", "sni": (hdr_host or addr) if tls else "",
-    }
-    return "vmess://" + base64.b64encode(json.dumps(obj, separators=(",", ":")).encode()).decode()
+    links = []
+    for ib in ibs:
+        proto = ib["protocol"]
+        name = "%s-%s" % (u["nick"], proto.upper()) if multi else u["nick"]
+        ss = ib.get("streamSettings") or {}
+        net = ss.get("network", "tcp")
+        tls = ss.get("security") == "tls"
+        path = hdr_host = ""
+        if net == "ws":
+            ws = ss.get("wsSettings") or {}
+            path = ws.get("path", "/")
+            hdr_host = (ws.get("headers") or {}).get("Host", "")
+        elif net == "grpc":
+            path = (ss.get("grpcSettings") or {}).get("serviceName", "")
+        if proto == "vless":
+            q = {"encryption": "none"}
+            flow = vless_flow(ib)
+            if flow:
+                q["flow"] = flow
+            q.update({"type": net, "security": "tls" if tls else "none"})
+            if net == "ws":
+                q["path"] = path
+                if hdr_host or tls:
+                    q["host"] = hdr_host or addr
+            elif net == "grpc":
+                q["serviceName"] = path
+                q["mode"] = "gun"
+            elif net == "tcp":
+                q["headerType"] = "none"
+            if tls:
+                q["sni"] = hdr_host or addr
+            links.append("vless://%s@%s:%s?%s#%s" % (
+                u["uuid"], addr, ib.get("port", ""),
+                urlencode(q, quote_via=quote), quote(name)))
+        else:
+            obj = {
+                "v": "2", "ps": name, "add": addr, "port": str(ib.get("port", "")),
+                "id": u["uuid"], "aid": "0", "scy": "auto", "net": net, "type": "none",
+                "host": hdr_host or (addr if tls else ""), "path": path,
+                "tls": "tls" if tls else "", "sni": (hdr_host or addr) if tls else "",
+            }
+            links.append("vmess://" + base64.b64encode(
+                json.dumps(obj, separators=(",", ":")).encode()).decode())
+    return links
+
+
+def build_link(u, host_hint):
+    """Todos los enlaces, uno por línea (o None si no hay)."""
+    links = build_links(u, host_hint)
+    return "\n".join(links) if links else None
 
 
 # -------------------------------------------------------------- acciones ----
@@ -330,7 +435,7 @@ def add_user(nick, days, uid=None):
         else:
             uid = str(uuidlib.uuid4())
         mail = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(10)) + "@gmail.com"
-        apply_config(adds=[{"alterId": 0, "id": uid, "email": mail}])
+        apply_config(adds=[{"id": uid, "email": mail}])
         exp = (date.today() + timedelta(days=days)).isoformat()
         users.append({"uuid": uid, "nick": nick, "exp": exp})
         write_registry(users)
@@ -352,11 +457,10 @@ def renew_user(uid, days, reset=False):
             base = base + timedelta(days=e["days"])
         u["exp"] = (base + timedelta(days=days)).isoformat()
         with open(V2CFG, encoding="utf-8") as f:
-            in_config = u["uuid"].lower() in ids_of(f.read())
+            in_config = all(u["uuid"].lower() in b for b in ids_per_inbound(f.read()))
         changed = False
-        if not in_config:  # huérfano: está en el registro pero no en config.json
-            changed = apply_config(adds=[{"alterId": 0, "id": u["uuid"],
-                                          "email": "re%s@gmail.com" % secrets.token_hex(4)}])
+        if not in_config:  # huérfano: falta en config.json (en todos o en alguno de los inbounds)
+            changed = apply_config(adds=[{"id": u["uuid"], "email": "re%s@gmail.com" % secrets.token_hex(4)}])
         write_registry(users)
         restarted = restart_v2ray() if changed else True
     return {"exp": u["exp"], "restarted": restarted}
@@ -539,10 +643,12 @@ def online_ips():
     """IPs distintas con conexión establecida al puerto de V2Ray (aprox.; tras CDN cuenta IPs del CDN)."""
     try:
         with open(V2CFG, encoding="utf-8") as f:
-            port = str(find_clients(json.load(f))[0].get("port", ""))
-        if not port.isdigit():
+            ports = sorted({str(ib.get("port", "")) for ib, _ in client_inbounds(json.load(f))})
+        ports = [p for p in ports if p.isdigit()]
+        if not ports:
             return 0
-        out = subprocess.run(["ss", "-Htn", "state", "established", "( sport = :%s )" % port],
+        flt = "( " + " or ".join("sport = :%s" % p for p in ports) + " )"
+        out = subprocess.run(["ss", "-Htn", "state", "established", flt],
                              capture_output=True, text=True, timeout=5).stdout
         ips = set()
         for line in out.splitlines():
@@ -592,9 +698,10 @@ def agent_action(action, f, host):
         if want and not UUID_RE.match(want):
             raise ApiError("UUID inválido")
         r = add_user(nick, to_int(f.get("days")), want or None)
-        link = build_link(r, host)
+        links = build_links(r, host)
         return {"ok": True, "msg": "Usuario V2Ray creado", "username": r["nick"], "password": r["uuid"],
-                "uuid": r["uuid"], "expiry": r["exp"], "limit": 1, "ip": host, "link": link}
+                "uuid": r["uuid"], "expiry": r["exp"], "limit": 1, "ip": host,
+                "link": "\n".join(links) or None, "links": links}
     if action in ("delete", "change_expiry", "link"):
         u = find_by_nick(nick)
         if action == "delete":
@@ -603,10 +710,10 @@ def agent_action(action, f, host):
         if action == "change_expiry":
             r = renew_user(u["uuid"], to_int(f.get("days")), reset=True)  # reemplaza: hoy + días
             return {"ok": True, "msg": "Vence: " + r["exp"], "expiry": r["exp"]}
-        link = build_link(u, host)
-        if not link:
-            raise ApiError("No se pudo generar el enlace (solo protocolo vmess)")
-        return {"ok": True, "link": link, "uuid": u["uuid"]}
+        links = build_links(u, host)
+        if not links:
+            raise ApiError("No se pudo generar el enlace (solo vmess o vless)")
+        return {"ok": True, "link": "\n".join(links), "links": links, "uuid": u["uuid"]}
     if action == "delete_expired":
         r = clean_expired()
         return {"ok": True, "msg": "%d expirado(s) eliminado(s)" % r["deleted"], "deleted": r["deleted"]}
@@ -853,7 +960,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, system_stats())
             if method == "POST" and path == "/api/users":
                 r = add_user(str(body.get("nick", "")).strip(), body.get("days"))
-                r["link"] = build_link(r, (self.headers.get("Host") or "").split(":")[0])
+                r["links"] = build_links(r, (self.headers.get("Host") or "").split(":")[0])
+                r["link"] = "\n".join(r["links"]) or None
                 return self.send(200, r)
             if method == "POST" and m and m.group(2) == "renew":
                 return self.send(200, renew_user(m.group(1), body.get("days")))
@@ -863,10 +971,10 @@ class Handler(BaseHTTPRequestHandler):
                 u = next((x for x in read_registry() if x["uuid"].lower() == m.group(1).lower()), None)
                 if not u:
                     raise ApiError("UUID no encontrado", 404)
-                link = build_link(u, (self.headers.get("Host") or "").split(":")[0])
-                if not link:
-                    raise ApiError("No se pudo generar el enlace (solo protocolo vmess)")
-                return self.send(200, {"link": link})
+                links = build_links(u, (self.headers.get("Host") or "").split(":")[0])
+                if not links:
+                    raise ApiError("No se pudo generar el enlace (solo vmess o vless)")
+                return self.send(200, {"link": "\n".join(links), "links": links})
             if method == "DELETE" and m and not m.group(2):
                 return self.send(200, delete_users([m.group(1)]))
             if method == "POST" and path == "/api/clean":
@@ -1271,13 +1379,13 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
 <div id="loginView" class="login-wrap hidden">
   <div class="login-switch"><button class="btn ibtn" data-open="dTheme" aria-label="Cambiar apariencia" title="Apariencia"><i data-ic="theme"></i></button></div>
   <div class="login-box">
-    <div class="login-logo"><div class="login-logo-icon">🛡️</div></div>
+    <div class="login-logo"><div class="login-logo-icon">🔐</div></div>
     <div class="login-title">PANEL <span>V2RAY</span></div>
     <div class="login-sub">ADMINISTRADOR DE CUENTAS UUID</div>
     <input class="login-input" type="password" id="pw" placeholder="Contraseña" autocomplete="current-password" aria-label="Contraseña">
     <button class="login-btn" id="loginBtn">ENTRAR</button>
     <div class="login-err hidden" id="loginErr" role="alert"></div>
-    <div class="login-hint">Powered By CloudGT</div>
+    <div class="login-hint">Acceso restringido al administrador</div>
   </div>
 </div>
 
@@ -1285,7 +1393,7 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
 <div id="appView" class="wrap hidden">
   <div class="header">
     <div class="logo">
-      <div class="logo-icon">🖥️</div>
+      <div class="logo-icon">🛰️</div>
       <div><div class="logo-text">Panel<span>V2Ray</span></div><div class="logo-sub">MANAGER · UUID</div></div>
     </div>
     <div class="header-right">
@@ -1298,20 +1406,20 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
 
   <section class="sys" aria-label="Uso del servidor">
     <div class="gauge" id="gCpu"><div class="g-top"><span class="g-lbl">CPU</span><span class="g-val" id="gCpuV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de CPU" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gCpuD">&nbsp;</div></div>
-    <div class="gauge" id="gMem"><div class="g-top"><span class="g-lbl">RAM</span><span class="g-val" id="gMemV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de RAM" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gMemD">&nbsp;</div></div>
-    <div class="gauge" id="gDisk"><div class="g-top"><span class="g-lbl">DISCO</span><span class="g-val" id="gDiskV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de Disco" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gDiskD">&nbsp;</div></div>
+    <div class="gauge" id="gMem"><div class="g-top"><span class="g-lbl">RAM</span><span class="g-val" id="gMemV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de memoria RAM" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gMemD">&nbsp;</div></div>
+    <div class="gauge" id="gDisk"><div class="g-top"><span class="g-lbl">DISCO</span><span class="g-val" id="gDiskV">–</span></div><div class="g-bar" role="progressbar" aria-label="Uso de disco" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="g-det" id="gDiskD">&nbsp;</div></div>
     <div class="sys-foot">
-      <span class="sf" title="Tiempo desde el último arranque del servidor"><i class="sf-l">UP TIME</i><b id="sUp">–</b></span>
-      <span class="sf rx" title="Tráfico recibido: velocidad actual y total desde el arranque"><i class="sf-l">⬇ Recibido</i><b id="sRx">–</b><em id="sRxT"></em></span>
-      <span class="sf tx" title="Tráfico enviado: velocidad actual y total desde el arranque"><i class="sf-l">⬆ Enviado</i><b id="sTx">–</b><em id="sTxT"></em></span>
+      <span class="sf" title="Tiempo desde el último arranque del servidor"><i class="sf-l">ENCENDIDO</i><b id="sUp">–</b></span>
+      <span class="sf rx" title="Tráfico recibido: velocidad actual y total desde el arranque"><i class="sf-l">↓ RECIBIDO</i><b id="sRx">–</b><em id="sRxT"></em></span>
+      <span class="sf tx" title="Tráfico enviado: velocidad actual y total desde el arranque"><i class="sf-l">↑ ENVIADO</i><b id="sTx">–</b><em id="sTxT"></em></span>
     </div>
   </section>
 
   <div class="stats" aria-label="Resumen y filtros">
-    <button class="stat-card" data-k="all" aria-pressed="true"><div class="stat-label">👤 CUENTAS</div><div class="stat-value" id="sTotal">0</div></button>
-    <button class="stat-card" data-k="active" aria-pressed="false"><div class="stat-label">🟢 ACTIVAS</div><div class="stat-value" id="sOk">0</div></button>
-    <button class="stat-card" data-k="soon" aria-pressed="false"><div class="stat-label">🟠 POR VENCER</div><div class="stat-value" id="sSoon">0</div></button>
-    <button class="stat-card" data-k="expired" aria-pressed="false"><div class="stat-label">🔴 VENCIDAS</div><div class="stat-value" id="sExp">0</div></button>
+    <button class="stat-card" data-k="all" aria-pressed="true"><div class="stat-label">CUENTAS</div><div class="stat-value" id="sTotal">0</div></button>
+    <button class="stat-card" data-k="active" aria-pressed="false"><div class="stat-label">ACTIVAS</div><div class="stat-value" id="sOk">0</div></button>
+    <button class="stat-card" data-k="soon" aria-pressed="false"><div class="stat-label">POR VENCER</div><div class="stat-value" id="sSoon">0</div></button>
+    <button class="stat-card" data-k="expired" aria-pressed="false"><div class="stat-label">VENCIDAS</div><div class="stat-value" id="sExp">0</div></button>
   </div>
 
   <div class="toolbar">
@@ -1326,7 +1434,7 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
   </div>
 </div>
 
-<footer class="footer"><div>© <span class="year" id="yr"></span> • Panel V2Ray • <span class="heart">v2.0</span></div><div class="version">Todos los derechos reservados</div></footer>
+<footer class="footer"><div>© <span class="year" id="yr"></span> • Panel V2Ray • <span class="heart">v1.5</span></div><div class="version">Todos los derechos reservados</div></footer>
 
 <!-- ───────── Diálogos ───────── -->
 <dialog class="modal" id="dNew">
@@ -1343,8 +1451,8 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
   <div class="modal-title"><span>✎ EDITAR DÍAS: <span id="rNick"></span></span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
   <div class="sub" id="rInfo"></div>
   <div class="seg" role="radiogroup" aria-label="Modo">
-    <button class="chip-btn sel" data-mode="set" role="radio" aria-checked="true">Fijar Días</button>
-    <button class="chip-btn" data-mode="add" role="radio" aria-checked="false">Sumar Dias</button>
+    <button class="chip-btn sel" data-mode="set" role="radio" aria-checked="true">Fijar días</button>
+    <button class="chip-btn" data-mode="add" role="radio" aria-checked="false">Sumar días</button>
   </div>
   <div class="field"><label for="rDays" id="rLabel">NUEVA DURACIÓN (DÍAS DESDE HOY)</label><input type="number" id="rDays" min="1" value="30" inputmode="numeric">
     <div class="chips" data-for="rDays"><button class="chip-btn">7</button><button class="chip-btn">15</button><button class="chip-btn sel">30</button><button class="chip-btn">60</button><button class="chip-btn">90</button></div></div>
@@ -1358,7 +1466,8 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
   <div class="kv">USUARIO</div><div class="kv-v" id="dNick"></div>
   <div class="kv">UUID</div><div class="res" id="dUuid"></div>
   <div class="kv">EXPIRA</div><div class="kv-v" id="dExp" style="margin-bottom:18px"></div>
-  <div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn" id="dCopyUuid"><i data-ic="copy"></i>Copiar UUID</button><button class="btn pri" id="dCopyLink"><i data-ic="link"></i>Copiar enlace</button></div>
+  <div class="foot" id="dLinks" style="margin-bottom:10px"></div>
+  <div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn" id="dCopyUuid"><i data-ic="copy"></i>Copiar UUID</button><button class="btn pri" id="dCopyLink"><i data-ic="link"></i>Copiar enlaces</button></div>
 </dialog>
 
 <dialog class="modal" id="dManual">
@@ -1369,8 +1478,8 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
 </dialog>
 
 <dialog class="modal" id="dSet">
-  <div class="modal-title"><span>⚙️ AJUSTES</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
-  <div class="field"><label for="setHost">DOMINIO O IP DE LOS ENLACES VMESS://</label><input type="text" id="setHost" placeholder="Vacío: usa la dirección con que abres el panel"></div>
+  <div class="modal-title"><span>⚙ AJUSTES</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
+  <div class="field"><label for="setHost">DOMINIO O IP DE LOS ENLACES VMESS:// / VLESS://</label><input type="text" id="setHost" placeholder="Vacío: usa la dirección con que abres el panel"></div>
   <div class="field"><label for="setUrl">CONEXIÓN CON TU PANEL MAESTRO · URL</label><input type="text" id="setUrl" readonly><div class="hint" id="setSec"></div></div>
   <div class="field"><label for="setTok">TOKEN</label><div class="row2"><input type="text" id="setTok" readonly><button class="btn" id="setCopyTok"><i data-ic="copy"></i>Copiar</button></div></div>
   <label class="chk"><input type="checkbox" id="setAuto"> Eliminar cuentas vencidas cada hora</label>
@@ -1379,11 +1488,11 @@ dialog.modal::backdrop{background:rgba(0,0,0,0.8);backdrop-filter:blur(6px)}
     <div class="svc-btns"><button class="btn" id="svcRestart"><i data-ic="power"></i>Reiniciar</button><button class="btn" id="svcToggle"></button></div>
     <div class="hint">Reiniciar o detener corta las conexiones activas.</div></div>
   <div class="form-err hidden" id="setErr" role="alert"></div>
-  <div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="setOk">Guardar</button></div>
+  <div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="setOk">Guardar ajustes</button></div>
 </dialog>
 
 <dialog class="modal" id="dTheme">
-  <div class="modal-title"><span>Temas</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
+  <div class="modal-title"><span>🎨 APARIENCIA</span><button class="close-btn" data-close aria-label="Cerrar">✕</button></div>
   <div class="sub">Elige el tema del panel. Se guarda en este dispositivo.</div>
   <div class="themes" role="radiogroup" aria-label="Tema">
     <button class="tcard" role="radio" data-t="dark" style="--a:#00c8ff;--b:#0d1321;--c:#e0f0ff"><span class="sw"><i></i><i></i><i></i></span><b>🌙 Oscuro</b><small>Neón azul</small></button>
@@ -1514,7 +1623,7 @@ function rowHTML(x){
     '<div class="c-exp '+EXPC[x.status]+'"><span class="lbl">Vence</span>'+esc(x.exp)+'</div>'+
     '<div class="c-days '+EXPC[x.status]+'"><b>'+dayTxt+'</b><small>'+unit+'</small></div>'+
     '<div class="c-acts">'+
-      '<button class="btn ibtn" data-a="link" title="Copiar enlace vmess" aria-label="Copiar enlace de '+esc(x.nick)+'">'+ic("link")+'</button>'+
+      '<button class="btn ibtn" data-a="link" title="Copiar enlace" aria-label="Copiar enlace de '+esc(x.nick)+'">'+ic("link")+'</button>'+
       '<button class="btn ibtn" data-a="edit" title="Editar días" aria-label="Editar días de '+esc(x.nick)+'">'+ic("edit")+'</button>'+
       '<button class="btn ibtn warn" data-a="del" title="Eliminar" aria-label="Eliminar a '+esc(x.nick)+'">'+ic("trash")+'</button>'+
     '</div></div>';
@@ -1550,7 +1659,7 @@ $("#list").addEventListener("click",async e=>{
   const row=b.closest(".lrow"),id=row.dataset.u,u=S.users.find(x=>x.uuid===id),a=b.dataset.a;
   try{
     if(a==="uuid")copy(id,"UUID copiado");
-    else if(a==="link"){const r=await api("/api/users/"+id+"/link");copy(r.link,"Enlace Vmess Copiado")}
+    else if(a==="link"){const r=await api("/api/users/"+id+"/link");copy(r.link,r.links&&r.links.length>1?"Enlaces copiados ("+r.links.length+")":"Enlace copiado")}
     else if(a==="edit"){
       curRenew=u;rMode="set";$("#rNick").textContent=u.nick;
       $("#rInfo").textContent="Ahora: "+(u.days===null?"sin fecha":(u.status==="expired"?"vencida el "+u.exp:"vence el "+u.exp+" ("+u.days+(u.days===1?" día":" días")+")"))+".";
@@ -1594,6 +1703,8 @@ $("#nOk").onclick=async()=>{
     lastNew=r;$("#dNew").close();
     $("#dNick").textContent=r.nick;$("#dUuid").textContent=r.uuid;$("#dExp").textContent=r.exp;
     $("#dCopyLink").classList.toggle("hidden",!r.link);
+    const L=r.links||(r.link?[r.link]:[]),box=$("#dLinks");box.innerHTML="";
+    if(L.length>1)L.forEach(l=>{const b=document.createElement("button");b.className="btn";b.textContent="Copiar "+l.split(":")[0].toUpperCase();b.onclick=()=>copy(l,l.split(":")[0].toUpperCase()+" copiado");box.appendChild(b)});
     $("#dDone").showModal();await load();
   }catch(e){setErr("#nErr",e.message)}
   $("#nOk").disabled=false;
